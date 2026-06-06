@@ -5,6 +5,7 @@ import {
   buildInboundContext,
   handleInboundAppointmentWebhook,
   handleInboundCancellation,
+  handleInboundWaitlist,
   listFonioUpcomingAppointments,
   searchFonioAvailableSlots,
   listFonioAvailableSlots
@@ -121,6 +122,28 @@ fonioRouter.post("/inbound-cancel", async (req, res, next) => {
       unresolved_client: 422,
       missing_appointment_id: 422,
       appointment_not_found_for_caller: 404
+    };
+
+    res.status(statusByReason[result.reason] ?? 422).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+fonioRouter.post("/inbound-waitlist", async (req, res, next) => {
+  try {
+    const result = await handleInboundWaitlist({
+      ...(req.body ?? {}),
+      authenticatedClientId: req.fonioAuth.clientId
+    });
+
+    if (result.handled) {
+      res.status(201).json(result);
+      return;
+    }
+
+    const statusByReason = {
+      unresolved_client: 422
     };
 
     res.status(statusByReason[result.reason] ?? 422).json(result);

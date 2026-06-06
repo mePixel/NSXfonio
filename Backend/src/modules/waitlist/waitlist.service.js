@@ -19,6 +19,16 @@ export async function getWaitlistEntry(clientId, id) {
   return row ?? null;
 }
 
+export async function listWaitlistEntriesByCustomerIds(clientId, customerIds) {
+  if (!Array.isArray(customerIds) || customerIds.length === 0) {
+    return [];
+  }
+
+  const uniqueCustomerIds = [...new Set(customerIds)];
+  const entries = await listWaitlistEntries(clientId);
+  return entries.filter((entry) => uniqueCustomerIds.includes(entry.customerId));
+}
+
 export async function createWaitlistEntry(clientId, data) {
   const [row] = await db
     .insert(waitingListEntries)
@@ -91,4 +101,13 @@ export async function deleteWaitlistEntry(clientId, id) {
     .where(and(eq(waitingListEntries.clientId, clientId), eq(waitingListEntries.id, id)))
     .returning();
   return row ?? null;
+}
+
+export async function deleteWaitlistEntryByCustomer(clientId, customerId) {
+  const existingEntry = await findWaitlistEntryByCustomer(clientId, customerId);
+  if (!existingEntry) {
+    return null;
+  }
+
+  return deleteWaitlistEntry(clientId, existingEntry.id);
 }
