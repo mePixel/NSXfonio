@@ -1,14 +1,12 @@
 import * as React from "react";
 import { type DayButtonProps } from "react-day-picker";
 import {
-  CalendarClock,
   CalendarDays,
   CircleAlert,
   Clock,
   Plus,
   RefreshCw,
-  Settings2,
-  UserRound,
+  TreePalm,
   XCircle,
 } from "lucide-react";
 import {
@@ -16,6 +14,7 @@ import {
   useFetcher,
   useLoaderData,
   useNavigate,
+  useNavigation,
   useRevalidator,
 } from "react-router";
 
@@ -42,6 +41,7 @@ import {
 } from "@/lib/appointments";
 import { type Client } from "@/lib/clients";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 type AppointmentsLoaderData = {
   date: string;
@@ -61,10 +61,12 @@ export function AppointmentsPage() {
   const { date, calendarMonth, appointments, appointmentDates, clients, settings } =
     useLoaderData() as AppointmentsLoaderData;
   const navigate = useNavigate();
+  const navigation = useNavigation();
   const revalidator = useRevalidator();
   const fetcher = useFetcher<AppointmentActionResult>();
   const formRef = React.useRef<HTMLFormElement>(null);
   const [open, setOpen] = React.useState(false);
+  const [initialTimeSlot, setInitialTimeSlot] = React.useState("");
   const isRefreshing = revalidator.state === "loading";
   const createResult =
     fetcher.data?.intent === "createAppointment" ? fetcher.data : null;
@@ -79,6 +81,8 @@ export function AppointmentsPage() {
   const bookedSlots = new Set(
     activeAppointments.map((appointment) => appointment.timeSlot),
   );
+  const slots = generateTimeSlots(settings);
+  const isWorkingDay = settings.workingDays.includes(getWeekday(date));
 
   function handleDateChange(nextDate: string) {
     if (nextDate !== date) {
@@ -86,9 +90,37 @@ export function AppointmentsPage() {
     }
   }
 
+  function handleCreateAtTime(timeSlot = "") {
+    setInitialTimeSlot(timeSlot);
+    setOpen(true);
+  }
+
+  function handleCreatePopoverOpenChange(nextOpen: boolean) {
+    if (nextOpen) {
+      setInitialTimeSlot("");
+    }
+
+    setOpen(nextOpen);
+  }
+
+  const isReloading =
+    navigation.state === "loading" && navigation.location?.pathname === "/appointments";
+
+  const prevCreateResultRef = React.useRef<typeof createResult>(null);
+
   React.useEffect(() => {
-    if (fetcher.state === "idle" && createResult?.ok) {
+    if (fetcher.state === "idle" && createResult?.ok && createResult !== prevCreateResultRef.current) {
+      prevCreateResultRef.current = createResult;
       const createdAppointment = createResult.appointments[0];
+      const patientName = createdAppointment
+        ? `${createdAppointment.client.firstName} ${createdAppointment.client.lastName}`
+        : "";
+
+      toast.success("Appointment created", {
+        description: patientName
+          ? `${patientName} on ${createdAppointment!.timeSlot}`
+          : undefined,
+      });
 
       formRef.current?.reset();
       const closeTimer = window.setTimeout(() => {
@@ -105,6 +137,16 @@ export function AppointmentsPage() {
       return () => window.clearTimeout(closeTimer);
     }
   }, [createResult, date, fetcher.state, navigate]);
+
+  React.useEffect(() => {
+    if (!isReloading && navigation.state === "idle") {
+      const hasReloaded = sessionStorage.getItem("appointments-reloaded");
+      if (hasReloaded) {
+        sessionStorage.removeItem("appointments-reloaded");
+        toast.success("Appointments reloaded successfully.");
+      }
+    }
+  }, [isReloading, navigation.state]);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
@@ -125,13 +167,18 @@ export function AppointmentsPage() {
               onChange={handleDateChange}
             />
             <Input name="date" type="hidden" value={date} />
-            <Button type="submit" variant="outline" size="sm">
-              <CalendarClock className="size-4" />
-              View
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              onClick={() => sessionStorage.setItem("appointments-reloaded", "true")}
+            >
+              <RefreshCw className="size-4" />
+              Reload
             </Button>
           </Form>
           <CreateAppointmentPopover
-            key={date}
+            key={`${date}-${initialTimeSlot}`}
             bookedSlots={bookedSlots}
             clients={clients}
             date={date}
@@ -140,8 +187,9 @@ export function AppointmentsPage() {
             formError={formError}
             formRef={formRef}
             isSubmitting={fetcher.state !== "idle"}
+            initialTimeSlot={initialTimeSlot}
             open={open}
-            setOpen={setOpen}
+            setOpen={handleCreatePopoverOpenChange}
             settings={settings}
           />
         </div>
@@ -167,10 +215,14 @@ export function AppointmentsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {selectedDateAppointments.length > 0 ? (
-            <AppointmentsTable appointments={selectedDateAppointments} />
+          {isWorkingDay ? (
+            <AppointmentsTable
+              appointments={selectedDateAppointments}
+              slots={slots}
+              onCreate={handleCreateAtTime}
+            />
           ) : (
-            <EmptyAppointmentsState onCreate={() => setOpen(true)} />
+            <FreeTimeState />
           )}
         </CardContent>
       </Card>
@@ -292,6 +344,7 @@ function CreateAppointmentPopover({
   fieldErrors,
   formError,
   formRef,
+  initialTimeSlot,
   isSubmitting,
   open,
   setOpen,
@@ -304,6 +357,7 @@ function CreateAppointmentPopover({
   fieldErrors: AppointmentFieldErrors;
   formError: string | null;
   formRef: React.RefObject<HTMLFormElement | null>;
+  initialTimeSlot: string;
   isSubmitting: boolean;
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -446,6 +500,7 @@ function CreateAppointmentPopover({
           )}
 
           <SelectField
+            defaultValue={initialTimeSlot}
             error={fieldErrors.timeSlot}
             label="Time slot"
             name="timeSlot"
@@ -538,7 +593,36 @@ function DatePickerField({
   );
 }
 
-function AppointmentsTable({ appointments }: { appointments: Appointment[] }) {
+function AppointmentsTable({
+  appointments,
+  onCreate,
+  slots,
+}: {
+  appointments: Appointment[];
+  onCreate: (timeSlot?: string) => void;
+  slots: string[];
+}) {
+  const visibleAppointments = appointments.filter(
+    (appointment) => appointment.status !== "cancelled",
+  );
+  const appointmentsBySlot = new Map(
+    visibleAppointments.map((appointment) => [appointment.timeSlot, appointment]),
+  );
+  const rows = [
+    ...slots.map((timeSlot) => ({
+      appointment: appointmentsBySlot.get(timeSlot),
+      key: timeSlot,
+      timeSlot,
+    })),
+    ...visibleAppointments
+      .filter((appointment) => !slots.includes(appointment.timeSlot))
+      .map((appointment) => ({
+        appointment,
+        key: appointment.id,
+        timeSlot: appointment.timeSlot,
+      })),
+  ];
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[820px] border-collapse text-left text-sm">
@@ -552,8 +636,13 @@ function AppointmentsTable({ appointments }: { appointments: Appointment[] }) {
           </tr>
         </thead>
         <tbody>
-          {appointments.map((appointment) => (
-            <AppointmentRow key={appointment.id} appointment={appointment} />
+          {rows.map((row) => (
+            <AppointmentRow
+              key={row.key}
+              appointment={row.appointment}
+              timeSlot={row.timeSlot}
+              onCreate={onCreate}
+            />
           ))}
         </tbody>
       </table>
@@ -561,48 +650,79 @@ function AppointmentsTable({ appointments }: { appointments: Appointment[] }) {
   );
 }
 
-function AppointmentRow({ appointment }: { appointment: Appointment }) {
+function AppointmentRow({
+  appointment,
+  onCreate,
+  timeSlot,
+}: {
+  appointment?: Appointment;
+  onCreate: (timeSlot?: string) => void;
+  timeSlot: string;
+}) {
   const fetcher = useFetcher<AppointmentActionResult>();
   const isCancelling = fetcher.state !== "idle";
-  const patientName = `${appointment.client.firstName} ${appointment.client.lastName}`;
+  const cancelResult =
+    fetcher.data?.intent === "cancelAppointment" ? fetcher.data : null;
+  const patientName = appointment
+    ? `${appointment.client.firstName} ${appointment.client.lastName}`
+    : "";
+  const moreInfo = !appointment
+    ? "No appointment scheduled"
+    : appointment.status === "cancelled" && appointment.cancellationReason
+      ? `Cancelled: ${appointment.cancellationReason}`
+      : appointment.moreInfo || "No notes";
+
+  const prevCancelResultRef = React.useRef<typeof cancelResult>(null);
+
+  React.useEffect(() => {
+    if (fetcher.state === "idle" && cancelResult?.ok && cancelResult !== prevCancelResultRef.current) {
+      prevCancelResultRef.current = cancelResult;
+      toast.success("Appointment cancelled", {
+        description: patientName ? `${patientName} at ${timeSlot}` : undefined,
+      });
+    }
+  }, [cancelResult, fetcher.state, patientName, timeSlot]);
 
   return (
     <tr
       className={cn(
         "border-b last:border-b-0",
-        appointment.status === "cancelled" && "bg-muted/30 text-muted-foreground",
+        !appointment && "bg-muted/20 text-muted-foreground",
+        appointment?.status === "cancelled" && "bg-muted/30 text-muted-foreground",
       )}
     >
-      <td className="px-4 py-3 font-medium">{appointment.timeSlot}</td>
+      <td className="px-4 py-3 font-medium">{timeSlot}</td>
       <td className="px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground">
-            <UserRound className="size-4" />
-          </span>
-          <span className="truncate font-medium">{patientName}</span>
-        </div>
+        {appointment ? (
+          <span className="block truncate font-medium">{patientName}</span>
+        ) : (
+          <span className="text-xs">Empty</span>
+        )}
       </td>
       <td className="px-4 py-3">
         <span
           className={cn(
             "rounded-md border px-2 py-1 text-xs capitalize",
-            appointment.status === "cancelled"
+            !appointment
+              ? "bg-background text-muted-foreground"
+              : appointment.status === "cancelled"
               ? "bg-muted text-muted-foreground"
               : "bg-primary/10 text-primary",
           )}
         >
-          {appointment.status}
+          {appointment?.status ?? "empty"}
         </span>
       </td>
       <td className="max-w-80 px-4 py-3 text-muted-foreground">
-        <span className="line-clamp-2">
-          {appointment.status === "cancelled" && appointment.cancellationReason
-            ? `Cancelled: ${appointment.cancellationReason}`
-            : appointment.moreInfo || "No notes"}
-        </span>
+        <span className="line-clamp-2">{moreInfo}</span>
       </td>
       <td className="px-4 py-3 text-right">
-        {appointment.status === "cancelled" ? null : (
+        {!appointment ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => onCreate(timeSlot)}>
+            <Plus className="size-4" />
+            Schedule
+          </Button>
+        ) : appointment.status === "cancelled" ? null : (
           <fetcher.Form method="post" action="/appointments" className="inline-flex gap-2">
             <input type="hidden" name="intent" value="cancelAppointment" />
             <input type="hidden" name="appointmentId" value={appointment.id} />
@@ -627,22 +747,18 @@ function AppointmentRow({ appointment }: { appointment: Appointment }) {
   );
 }
 
-function EmptyAppointmentsState({ onCreate }: { onCreate: () => void }) {
+function FreeTimeState() {
   return (
     <div className="flex min-h-64 flex-col items-center justify-center gap-3 px-4 py-10 text-center">
       <span className="flex size-10 items-center justify-center rounded-lg border bg-muted text-muted-foreground">
-        <Settings2 className="size-5" />
+        <TreePalm className="size-5" />
       </span>
       <div className="space-y-1">
-        <h2 className="text-sm font-medium">No appointments for this date</h2>
+        <h2 className="text-sm font-medium">Enjoy your free time</h2>
         <p className="max-w-sm text-xs text-muted-foreground">
-          Schedule a patient visit for the selected day.
+          This date is outside the configured working days.
         </p>
       </div>
-      <Button type="button" size="sm" onClick={onCreate}>
-        <Plus className="size-4" />
-        New appointment
-      </Button>
     </div>
   );
 }
@@ -678,12 +794,14 @@ function FormField({
 
 function SelectField({
   children,
+  defaultValue,
   error,
   label,
   name,
   required,
 }: {
   children: React.ReactNode;
+  defaultValue?: string;
   error?: string;
   label: string;
   name: string;
@@ -698,6 +816,7 @@ function SelectField({
           "h-8 w-full rounded-md border border-input bg-input/20 px-2 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20 md:text-xs dark:bg-input/30",
           error && "border-destructive",
         )}
+        defaultValue={defaultValue}
         name={name}
         required={required}
       >

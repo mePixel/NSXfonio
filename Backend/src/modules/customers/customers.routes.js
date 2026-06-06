@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
 import { str, uuid } from "../../lib/sanitize.js";
 import * as service from "./customers.service.js";
+import { listAppointmentsForCustomer } from "../appointments/appointments.service.js";
 
 export const customersRouter = Router();
 
@@ -59,6 +60,27 @@ customersRouter.get("/:id", async (req, res, next) => {
       return;
     }
     res.json(customer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+customersRouter.get("/:id/appointments", async (req, res, next) => {
+  try {
+    const id = uuid(req.params.id);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+
+    const customer = await service.getCustomer(req.user.clientId, id);
+    if (!customer) {
+      res.status(404).json({ error: "Customer not found" });
+      return;
+    }
+
+    const appointments = await listAppointmentsForCustomer(req.user.clientId, id);
+    res.json({ appointments });
   } catch (error) {
     next(error);
   }

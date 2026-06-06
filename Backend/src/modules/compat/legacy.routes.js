@@ -532,7 +532,8 @@ legacyRouter.get("/appointments", requireAuth, requireClient, async (req, res, n
           and(
             eq(appointments.clientId, req.user.clientId),
             gte(appointments.startsAt, start),
-            lt(appointments.startsAt, end)
+            lt(appointments.startsAt, end),
+            ne(appointments.status, "cancelled")
           )
         )
         .orderBy(asc(appointments.startsAt));

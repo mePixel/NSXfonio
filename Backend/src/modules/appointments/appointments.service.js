@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { appointments, customers, slots } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
@@ -9,6 +9,19 @@ export function listAppointments(clientId) {
     .select()
     .from(appointments)
     .where(eq(appointments.clientId, clientId));
+}
+
+export function listAppointmentsForCustomer(clientId, customerId) {
+  return db
+    .select()
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.clientId, clientId),
+        eq(appointments.customerId, customerId)
+      )
+    )
+    .orderBy(asc(appointments.startsAt));
 }
 
 export async function getAppointment(clientId, id) {
