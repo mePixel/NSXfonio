@@ -6,7 +6,7 @@ import { advanceOfferCycle, moveWaitlistEntryToEnd } from "../waitlist/offers.se
 import { handleInboundAppointmentWebhook, isInboundAppointmentWebhook } from "./fonio.inbound.service.js";
 
 async function storeWebhookEvent(payload) {
-  const externalEventId = payload?.callId ?? payload?.id ?? null;
+  const externalEventId = payload?.eventId ?? payload?.webhookEventId ?? payload?.callId ?? payload?.id ?? null;
 
   try {
     const [event] = await db.insert(webhookEvents).values({
@@ -20,7 +20,13 @@ async function storeWebhookEvent(payload) {
 
     return { event, duplicated: false };
   } catch (error) {
-    if (error?.code === "23505") {
+    const isDuplicateExternalEvent = error?.code === "23505"
+      && (
+        error?.constraint === "webhook_events_external_event_id_unique"
+        || String(error?.detail ?? "").includes("external_event_id")
+      );
+
+    if (isDuplicateExternalEvent) {
       return { event: null, duplicated: true };
     }
     throw error;

@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { Router } from "express";
-import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, ne } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
 import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
@@ -654,6 +654,60 @@ legacyRouter.post("/clients", requireAuth, requireClient, async (req, res, next)
   }
 });
 
+legacyRouter.delete("/clients/:id", requireAuth, requireClient, async (req, res, next) => {
+  try {
+    const deleted = await db.transaction(async (tx) => {
+      const [customer] = await tx
+        .select()
+        .from(customers)
+        .where(and(eq(customers.clientId, req.user.clientId), eq(customers.id, req.params.id)));
+
+      if (!customer) {
+        return null;
+      }
+
+      const customerAppointments = await tx
+        .select({ id: appointments.id })
+        .from(appointments)
+        .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.customerId, req.params.id)));
+
+      const appointmentIds = customerAppointments.map((appointment) => appointment.id);
+
+      if (appointmentIds.length > 0) {
+        await tx
+          .update(slots)
+          .set({ status: "available", appointmentId: null, updatedAt: new Date() })
+          .where(and(eq(slots.clientId, req.user.clientId), inArray(slots.appointmentId, appointmentIds)));
+
+        await tx
+          .delete(appointments)
+          .where(and(eq(appointments.clientId, req.user.clientId), inArray(appointments.id, appointmentIds)));
+      }
+
+      await tx
+        .delete(customers)
+        .where(and(eq(customers.clientId, req.user.clientId), eq(customers.id, req.params.id)));
+
+      return {
+        customer,
+        deletedAppointmentCount: appointmentIds.length
+      };
+    });
+
+    if (!deleted) {
+      res.status(404).json({ error: "Client not found." });
+      return;
+    }
+
+    res.json({
+      clients: [mapCustomerToLegacyClient(deleted.customer)],
+      deletedAppointmentCount: deleted.deletedAppointmentCount
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 legacyRouter.get("/appointment-settings", requireAuth, requireClient, async (req, res, next) => {
   try {
     const settings = await ensureAppointmentSettings();
@@ -966,7 +1020,6 @@ legacyRouter.patch("/appointments/:id/cancel", requireAuth, requireClient, async
       typeof req.body?.cancellationReason === "string"
         ? req.body.cancellationReason.trim()
         : "";
-
     const appointment = await transitionStatus(
       req.user.clientId,
       req.params.id,
@@ -991,7 +1044,6 @@ legacyRouter.patch("/appointments/:id/cancel", requireAuth, requireClient, async
         })
         .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.id, req.params.id)));
     }
-
     const mappedAppointment = await readLegacyAppointment(req.user.clientId, req.params.id);
 
     res.json({ appointments: [mappedAppointment] });

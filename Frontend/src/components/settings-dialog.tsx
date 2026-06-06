@@ -4,13 +4,16 @@ import * as React from "react";
 import {
   CalendarClock,
   KeyRound,
+  Moon,
   RefreshCw,
   Settings2,
   ShieldCheck,
+  Sun,
   Trash2,
 } from "lucide-react";
 import { useFetcher, useRevalidator } from "react-router";
 
+import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import {
@@ -170,6 +173,8 @@ function GeneralSettingsPanel() {
 
   return (
     <div className="grid gap-4">
+      <AppearanceSettingsSection />
+
       <div className="flex flex-col gap-1">
         <h3 className="flex items-center gap-2 text-sm font-semibold">
           <ShieldCheck className="size-4 text-muted-foreground" />
@@ -241,6 +246,43 @@ function GeneralSettingsPanel() {
         ) : null}
       </fetcher.Form>
     </div>
+  );
+}
+
+function AppearanceSettingsSection() {
+  const { resolvedTheme, setTheme } = useTheme();
+
+  return (
+    <section className="grid gap-3 rounded-lg border bg-muted/20 p-4">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-sm font-semibold">Appearance</h3>
+        <p className="text-xs text-muted-foreground">
+          Choose the color mode used across the dashboard.
+        </p>
+      </div>
+      <ButtonGroup className="w-fit">
+        <Button
+          type="button"
+          variant={resolvedTheme === "light" ? "default" : "outline"}
+          size="sm"
+          aria-pressed={resolvedTheme === "light"}
+          onClick={() => setTheme("light")}
+        >
+          <Sun className="size-4" />
+          Light
+        </Button>
+        <Button
+          type="button"
+          variant={resolvedTheme === "dark" ? "default" : "outline"}
+          size="sm"
+          aria-pressed={resolvedTheme === "dark"}
+          onClick={() => setTheme("dark")}
+        >
+          <Moon className="size-4" />
+          Dark
+        </Button>
+      </ButtonGroup>
+    </section>
   );
 }
 

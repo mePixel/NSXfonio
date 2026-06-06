@@ -21,6 +21,37 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
+function getSearchWindow(search, { now, defaultWindowDays }) {
+  const exactStart = parseDate(
+    search?.startsAt
+      ?? search?.requestedStartsAt
+      ?? search?.time
+      ?? search?.datetime
+      ?? null
+  );
+  const from = exactStart ?? parseDate(search?.from) ?? now;
+  const parsedTo = parseDate(
+    search?.endsAt
+      ?? search?.requestedEndsAt
+      ?? search?.to
+      ?? null
+  );
+
+  if (parsedTo && parsedTo > from) {
+    return { from, to: parsedTo };
+  }
+
+  if (exactStart || (parsedTo && parsedTo.getTime() === from.getTime())) {
+    return { from, to: addMinutes(from, 30) };
+  }
+
+  return { from, to: addMinutes(from, defaultWindowDays * 24 * 60) };
+}
+
 function timeOfDayMatches(date, timeOfDay) {
   if (!timeOfDay) return true;
 
@@ -196,6 +227,37 @@ async function findAvailableSlot(clientId, booking) {
   return slot ?? null;
 }
 
+async function findRequestedSlot(clientId, booking) {
+  const directSlotId = booking?.slotId ?? booking?.slot?.id ?? null;
+  if (directSlotId) {
+    const [slot] = await db
+      .select()
+      .from(slots)
+      .where(and(
+        eq(slots.clientId, clientId),
+        eq(slots.id, directSlotId)
+      ));
+    return slot ?? null;
+  }
+
+  const startsAt = parseDate(booking?.startsAt ?? booking?.requestedStartsAt ?? booking?.time);
+  const endsAt = parseDate(booking?.endsAt ?? booking?.requestedEndsAt ?? null);
+  if (!startsAt) return null;
+
+  const effectiveEndsAt = endsAt ?? new Date(startsAt.getTime() + 30 * 60 * 1000);
+
+  const [slot] = await db
+    .select()
+    .from(slots)
+    .where(and(
+      eq(slots.clientId, clientId),
+      gte(slots.startsAt, startsAt),
+      lte(slots.endsAt, effectiveEndsAt)
+    ));
+
+  return slot ?? null;
+}
+
 async function findOrCreateInboundCustomer(clientId, payload) {
   const phone = getRequestedPhone(payload);
   const incomingCustomer = getCustomerPayload(payload);
@@ -268,8 +330,7 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
     ? await findWaitlistEntryByCustomer(clientId, customer.id)
     : null;
 
-  const from = parseDate(search?.from) ?? now;
-  const to = parseDate(search?.to) ?? new Date(from.getTime() + defaultWindowDays * 24 * 60 * 60 * 1000);
+  const { from, to } = getSearchWindow(search, { now, defaultWindowDays });
   const timeOfDay = typeof search?.timeOfDay === "string" ? search.timeOfDay : null;
 
   if (to <= from) {
@@ -492,6 +553,47 @@ export async function handleInboundAppointmentWebhook(payload) {
 
   const slot = await findAvailableSlot(clientId, booking);
   if (!slot) {
+    if (wantsWaitlist(payload, booking)) {
+      const customer = await findOrCreateInboundCustomer(clientId, payload);
+      const requestedSlot = await findRequestedSlot(clientId, booking);
+      const waitlistResult = await createWaitlistEntryForCustomer(clientId, customer.id, {
+        notes: requestedSlot
+          ? `Requested earlier appointment options during Fonio booking for slot ${requestedSlot.id}.`
+          : "Requested earlier appointment options during Fonio booking."
+      });
+
+      await db.insert(communicationLogs).values({
+        id: randomUUID(),
+        clientId,
+        appointmentId: requestedSlot?.appointmentId ?? null,
+        customerId: customer.id,
+        channel: "call",
+        direction: "inbound",
+        eventType: "waitlist_joined_from_inbound_booking_call",
+        status: payload?.status ?? "processed",
+        externalCallId: payload?.callId ?? payload?.id ?? null,
+        payloadJson: JSON.stringify(payload)
+      });
+
+      return {
+        handled: true,
+        mode: "inbound_waitlist_after_booking",
+        clientId,
+        appointmentId: requestedSlot?.appointmentId ?? null,
+        customerId: customer.id,
+        slotId: requestedSlot?.id ?? booking?.slotId ?? booking?.slot?.id ?? null,
+        waitlist: {
+          entryId: waitlistResult.entry.id,
+          created: waitlistResult.created,
+          position: waitlistResult.entry.position
+        },
+        promptHints: {
+          bookingCreated: false,
+          reason: requestedSlot ? "requested_slot_unavailable" : "no_matching_available_slot"
+        }
+      };
+    }
+
     return { handled: false, reason: "no_matching_available_slot" };
   }
 
