@@ -14,6 +14,7 @@ import { waitlistRouter } from "./modules/waitlist/waitlist.routes.js";
 import { slotsRouter } from "./modules/slots/slots.routes.js";
 import { webhooksRouter } from "./modules/webhooks/webhooks.routes.js";
 import { fonioRouter } from "./modules/fonio/fonio.routes.js";
+import { onboardingRouter } from "./modules/onboarding/onboarding.routes.js";
 
 export const app = express();
 
@@ -62,6 +63,7 @@ app.use("/api/waiting-list", waitlistRouter);
 app.use("/api/slots", slotsRouter);
 app.use("/api/webhooks", webhooksRouter);
 app.use("/api/fonio", fonioRouter);
+app.use("/api/onboarding", onboardingRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });
