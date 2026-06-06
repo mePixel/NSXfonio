@@ -31,7 +31,11 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
   const updated = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(appointments)
-      .set({ status: toStatus, updatedAt: new Date() })
+      .set({
+        status: toStatus,
+        ...(toStatus === "cancelled" ? { cancelReason: reason } : {}),
+        updatedAt: new Date()
+      })
       .where(and(eq(appointments.clientId, clientId), eq(appointments.id, appointmentId)))
       .returning();
 
