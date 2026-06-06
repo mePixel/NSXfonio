@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../../lib/middleware.js";
 import { str } from "../../lib/sanitize.js";
@@ -36,7 +37,7 @@ onboardingRouter.post("/client", async (req, res, next) => {
 
     const [client] = await db
       .insert(clients)
-      .values({ name })
+      .values({ id: randomUUID(), name })
       .returning();
 
     await db
