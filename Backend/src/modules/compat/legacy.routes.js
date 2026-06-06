@@ -4,6 +4,7 @@ import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
 import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
+import { transitionStatus } from "../appointments/status.service.js";
 import { createWaitlistEntryForCustomer } from "../waitlist/waitlist.service.js";
 import { listWaitlistEntriesByCustomerIds } from "../waitlist/waitlist.service.js";
 
@@ -965,26 +966,30 @@ legacyRouter.patch("/appointments/:id/cancel", requireAuth, requireClient, async
       typeof req.body?.cancellationReason === "string"
         ? req.body.cancellationReason.trim()
         : "";
-    const [appointment] = await db
-      .update(appointments)
-      .set({
-        status: "cancelled",
-        cancelReason: cancellationReason || null,
-        updatedAt: new Date()
-      })
-      .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.id, req.params.id)))
-      .returning();
+
+    const appointment = await transitionStatus(
+      req.user.clientId,
+      req.params.id,
+      "cancelled",
+      {
+        userId: req.user.id,
+        reason: cancellationReason || null
+      }
+    );
 
     if (!appointment) {
       res.status(404).json({ error: "Appointment not found." });
       return;
     }
 
-    if (appointment.slotId) {
+    if (appointment.cancelReason !== (cancellationReason || null)) {
       await db
-        .update(slots)
-        .set({ status: "available", appointmentId: null, updatedAt: new Date() })
-        .where(eq(slots.id, appointment.slotId));
+        .update(appointments)
+        .set({
+          cancelReason: cancellationReason || null,
+          updatedAt: new Date()
+        })
+        .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.id, req.params.id)));
     }
 
     const mappedAppointment = await readLegacyAppointment(req.user.clientId, req.params.id);
