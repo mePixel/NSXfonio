@@ -25,11 +25,28 @@ async function getNextEntry(clientId, slotId) {
     .from(waitlistOffers)
     .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.slotId, slotId)));
 
+  const activeOffers = await db
+    .select()
+    .from(waitlistOffers)
+    .where(and(
+      eq(waitlistOffers.clientId, clientId),
+      inArray(waitlistOffers.status, ACTIVE_STATUSES)
+    ));
+
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+
   for (const entry of entries) {
     const entryOffers = existingOffers.filter(o => o.waitingListEntryId === entry.id);
     const hasActive   = entryOffers.some(o => ACTIVE_STATUSES.includes(o.status));
     const hasAccepted = entryOffers.some(o => o.status === "accepted");
-    if (!hasActive && !hasAccepted) return entry;
+    const hasOtherActiveOffer = activeOffers.some((offer) => {
+      if (offer.slotId === slotId) return false;
+
+      const offeredEntry = entryById.get(offer.waitingListEntryId);
+      return offeredEntry?.customerId === entry.customerId;
+    });
+
+    if (!hasActive && !hasAccepted && !hasOtherActiveOffer) return entry;
   }
 
   return null;
@@ -181,4 +198,21 @@ export async function advanceOfferCycle(clientId, offerId, { userId = null } = {
 
 export function listOffers(clientId) {
   return db.select().from(waitlistOffers).where(eq(waitlistOffers.clientId, clientId));
+}
+
+export async function autoStartOfferCycle(clientId, slotId, options = {}) {
+  try {
+    return await startOfferCycle(clientId, slotId, options);
+  } catch (error) {
+    if ([404, 409, 422].includes(error?.status)) {
+      return null;
+    }
+
+    console.error("[waitlist] automatic offer cycle failed", {
+      clientId,
+      slotId,
+      error: error?.message ?? error
+    });
+    return null;
+  }
 }

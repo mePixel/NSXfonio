@@ -32,6 +32,10 @@ export async function loadFonioApiKey() {
 
   await ensureAuthenticated(response, "/settings");
 
+  if (response.status === 404) {
+    return { apiKey: null } as FonioApiKeyResponse;
+  }
+
   if (!response.ok) {
     throw new Response("Unable to load settings.", {
       status: response.status,
