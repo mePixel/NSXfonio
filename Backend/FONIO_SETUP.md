@@ -93,9 +93,15 @@ Example response:
       "status": "available"
     }
   ],
+  "waitlist": {
+    "offerEarlierAppointments": true,
+    "alreadyJoined": false,
+    "position": null
+  },
   "bookingRules": {
     "timezone": "Europe/Vienna",
-    "maxSlotsToOffer": 3
+    "maxSlotsToOffer": 3,
+    "askWaitlistAfterBooking": true
   },
   "promptHints": {
     "bookingAvailable": true,
@@ -106,6 +112,8 @@ Example response:
 
 Fonio can use `{{practiceName}}`, `{{customer.firstName}}`, and the `availableSlots` array directly in the prompt.
 If the caller is recognized, `upcomingAppointments` is also returned so cancellation can start immediately.
+After the caller confirms a slot, Fonio should ask whether they want to join the waitlist for an earlier appointment if someone cancels.
+Use the `waitlist` object to avoid asking again when the caller is already on the waitlist.
 
 For dynamic availability lookup during the call, use:
 
@@ -255,7 +263,8 @@ Example request body:
     "slotId": "slot-1",
     "title": "First consultation",
     "appointmentType": "Consultation",
-    "notes": "Booked by Fonio during inbound call"
+    "notes": "Booked by Fonio during inbound call",
+    "joinWaitlist": true
   },
   "status": "booked",
   "direction": "inbound"
@@ -271,7 +280,12 @@ Success response:
   "clientId": "actual-client-id",
   "appointmentId": "appointment-id",
   "customerId": "customer-id",
-  "slotId": "slot-1"
+  "slotId": "slot-1",
+  "waitlist": {
+    "entryId": "waitlist-entry-id",
+    "created": true,
+    "position": 4
+  }
 }
 ```
 

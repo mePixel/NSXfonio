@@ -4,6 +4,7 @@ import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
 import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
+import { createWaitlistEntryForCustomer } from "../waitlist/waitlist.service.js";
 
 const DEFAULT_APPOINTMENT_SETTINGS_ID = "default";
 const DEFAULT_TIME_SLOT_SIZE = 30;
@@ -500,6 +501,7 @@ async function validateAppointmentPayload(clientId, body) {
     typeof body?.appointmentDate === "string" ? body.appointmentDate.trim() : "";
   const timeSlot = typeof body?.timeSlot === "string" ? body.timeSlot.trim() : "";
   const moreInfo = typeof body?.moreInfo === "string" ? body.moreInfo.trim() : "";
+  const joinWaitlist = body?.joinWaitlist === true || body?.joinWaitlist === "true" || body?.joinWaitlist === "on";
   const settings = normalizeAppointmentSettings(await ensureAppointmentSettings());
   const customerInput = await readCustomerForAppointment(clientId, body, errors);
 
@@ -524,6 +526,7 @@ async function validateAppointmentPayload(clientId, body) {
       appointmentDate,
       timeSlot,
       moreInfo,
+      joinWaitlist,
       settings,
       customerInput
     },
@@ -915,7 +918,27 @@ legacyRouter.post("/appointments", requireAuth, requireClient, async (req, res, 
       };
     });
 
-    res.status(201).json({ appointments: [mapAppointmentRow(appointment)] });
+    let waitlist = null;
+    if (values.joinWaitlist) {
+      const waitlistResult = await createWaitlistEntryForCustomer(
+        req.user.clientId,
+        appointment.customerId,
+        {
+          notes: `Wants earlier appointment times after booking ${values.appointmentDate} ${values.timeSlot}.`
+        }
+      );
+
+      waitlist = {
+        entryId: waitlistResult.entry.id,
+        created: waitlistResult.created,
+        position: waitlistResult.entry.position
+      };
+    }
+
+    res.status(201).json({
+      appointments: [mapAppointmentRow(appointment)],
+      waitlist
+    });
   } catch (error) {
     next(error);
   }

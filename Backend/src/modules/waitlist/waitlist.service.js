@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { asc, and, eq } from "drizzle-orm";
+import { asc, and, desc, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { waitingListEntries } from "../../db/schema.js";
 
@@ -31,6 +31,45 @@ export async function createWaitlistEntry(clientId, data) {
     })
     .returning();
   return row;
+}
+
+export async function findWaitlistEntryByCustomer(clientId, customerId) {
+  const [row] = await db
+    .select()
+    .from(waitingListEntries)
+    .where(and(
+      eq(waitingListEntries.clientId, clientId),
+      eq(waitingListEntries.customerId, customerId)
+    ))
+    .orderBy(asc(waitingListEntries.position));
+  return row ?? null;
+}
+
+export async function createWaitlistEntryForCustomer(clientId, customerId, { notes = null } = {}) {
+  const existingEntry = await findWaitlistEntryByCustomer(clientId, customerId);
+  if (existingEntry) {
+    return { entry: existingEntry, created: false };
+  }
+
+  const [lastEntry] = await db
+    .select({ position: waitingListEntries.position })
+    .from(waitingListEntries)
+    .where(eq(waitingListEntries.clientId, clientId))
+    .orderBy(desc(waitingListEntries.position))
+    .limit(1);
+
+  const [entry] = await db
+    .insert(waitingListEntries)
+    .values({
+      id: randomUUID(),
+      clientId,
+      customerId,
+      position: (lastEntry?.position ?? 0) + 1,
+      notes
+    })
+    .returning();
+
+  return { entry, created: true };
 }
 
 export async function updateWaitlistEntry(clientId, id, data) {

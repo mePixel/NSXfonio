@@ -7,6 +7,7 @@ import { listUpcomingAppointmentsForCustomer } from "../appointments/appointment
 import { transitionStatus } from "../appointments/status.service.js";
 import { createAppointment } from "../appointments/appointments.service.js";
 import { createCustomer, findCustomerByPhone } from "../customers/customers.service.js";
+import { createWaitlistEntryForCustomer, findWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
 function normalizePhone(value) {
   if (typeof value !== "string") return null;
@@ -43,6 +44,19 @@ function getCancellationPayload(payload) {
 
 function getCustomerPayload(payload) {
   return payload?.customer ?? payload?.caller ?? payload?.contact ?? null;
+}
+
+function wantsWaitlist(payload, booking) {
+  const value = booking?.joinWaitlist
+    ?? booking?.waitlist
+    ?? booking?.waitlistOptIn
+    ?? payload?.waitlist?.join
+    ?? payload?.waitlist?.optIn
+    ?? payload?.joinWaitlist
+    ?? null;
+
+  if (typeof value === "boolean") return value;
+  return ["true", "yes", "1", "on", "opt_in", "opt-in"].includes(String(value ?? "").toLowerCase());
 }
 
 function getRequestedPhone(payload) {
@@ -295,9 +309,15 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
       calledNumber,
       customer: null,
       availableSlots: [],
+      waitlist: {
+        offerEarlierAppointments: true,
+        alreadyJoined: false,
+        position: null
+      },
       bookingRules: {
         timezone: "Europe/Vienna",
-        maxSlotsToOffer: maxSlots
+        maxSlotsToOffer: maxSlots,
+        askWaitlistAfterBooking: true
       },
       promptHints: {
         bookingAvailable: false,
@@ -308,6 +328,9 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
 
   const customer = callerPhone
     ? await findCustomerByPhone(clientId, callerPhone)
+    : null;
+  const waitlistEntry = customer
+    ? await findWaitlistEntryByCustomer(clientId, customer.id)
     : null;
   const upcomingAppointments = customer
     ? await listUpcomingAppointmentsForCustomer(clientId, customer.id, { now })
@@ -347,10 +370,16 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
       endsAt: appointment.endsAt,
       status: appointment.status
     })),
+    waitlist: {
+      offerEarlierAppointments: true,
+      alreadyJoined: Boolean(waitlistEntry),
+      position: waitlistEntry?.position ?? null
+    },
     availableSlots,
     bookingRules: {
       timezone: "Europe/Vienna",
-      maxSlotsToOffer: maxSlots
+      maxSlotsToOffer: maxSlots,
+      askWaitlistAfterBooking: true
     },
     promptHints: {
       bookingAvailable: availableSlots.length > 0,
@@ -451,6 +480,18 @@ export async function handleInboundAppointmentWebhook(payload) {
     notes: booking?.notes ?? payload?.summary ?? "Booked by Fonio inbound call"
   });
 
+  let waitlist = null;
+  if (wantsWaitlist(payload, booking)) {
+    const waitlistResult = await createWaitlistEntryForCustomer(clientId, customer.id, {
+      notes: `Requested earlier appointment options during Fonio booking for slot ${slot.id}.`
+    });
+    waitlist = {
+      entryId: waitlistResult.entry.id,
+      created: waitlistResult.created,
+      position: waitlistResult.entry.position
+    };
+  }
+
   await db.insert(communicationLogs).values({
     id: randomUUID(),
     clientId,
@@ -470,7 +511,8 @@ export async function handleInboundAppointmentWebhook(payload) {
     clientId,
     appointmentId: appointment.id,
     customerId: customer.id,
-    slotId: slot.id
+    slotId: slot.id,
+    waitlist
   };
 }
 
