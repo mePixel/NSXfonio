@@ -96,6 +96,27 @@ export async function loadAppointments(date: string) {
   return (await response.json()) as { appointments: Appointment[] };
 }
 
+export async function loadAppointmentDates(start: string, end: string) {
+  const response = await fetch(
+    `${apiURL}/api/appointments?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    {
+      credentials: "include",
+    },
+  );
+
+  if (response.status === 401) {
+    redirectToLogin("/appointments");
+  }
+
+  if (!response.ok) {
+    throw new Response("Unable to load appointment dates.", {
+      status: response.status,
+    });
+  }
+
+  return (await response.json()) as { appointmentDates: string[] };
+}
+
 export async function loadAppointmentSettings() {
   const response = await fetch(`${apiURL}/api/appointment-settings`, {
     credentials: "include",

@@ -4,6 +4,7 @@ import {
   cancelAppointment,
   createAppointment,
   getTodayDate,
+  loadAppointmentDates,
   loadAppointments,
   loadAppointmentSettings,
   updateAppointmentSettings,
@@ -13,18 +14,44 @@ import { loadClients } from "@/lib/clients";
 export async function appointmentsLoader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const date = url.searchParams.get("date") || getTodayDate();
-  const [appointments, clients, settings] = await Promise.all([
+  const calendarMonth = getMonthStartDate(url.searchParams.get("month") || date);
+  const calendarEnd = getMonthEndDate(calendarMonth);
+  const [appointments, clients, settings, appointmentDates] = await Promise.all([
     loadAppointments(date),
     loadClients(),
     loadAppointmentSettings(),
+    loadAppointmentDates(calendarMonth, calendarEnd),
   ]);
 
   return {
     date,
+    calendarMonth,
     ...appointments,
     ...clients,
     ...settings,
+    ...appointmentDates,
   };
+}
+
+function getMonthStartDate(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    "01",
+  ].join("-");
+}
+
+function getMonthEndDate(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+
+  return [
+    end.getFullYear(),
+    String(end.getMonth() + 1).padStart(2, "0"),
+    String(end.getDate()).padStart(2, "0"),
+  ].join("-");
 }
 
 export async function appointmentsAction({ request }: ActionFunctionArgs) {

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { type DayButtonProps } from "react-day-picker";
 import {
   CalendarClock,
   CalendarDays,
@@ -19,7 +20,7 @@ import {
 } from "react-router";
 
 import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
+import { Calendar, CalendarDayButton } from "@/components/ui/calendar";
 import {
   Card,
   CardContent,
@@ -44,7 +45,9 @@ import { cn } from "@/lib/utils";
 
 type AppointmentsLoaderData = {
   date: string;
+  calendarMonth: string;
   appointments: Appointment[];
+  appointmentDates: string[];
   clients: Client[];
   settings: AppointmentSettings;
 };
@@ -55,7 +58,7 @@ type AppointmentActionResult =
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function AppointmentsPage() {
-  const { date, appointments, clients, settings } =
+  const { date, calendarMonth, appointments, appointmentDates, clients, settings } =
     useLoaderData() as AppointmentsLoaderData;
   const navigate = useNavigate();
   const revalidator = useRevalidator();
@@ -114,7 +117,13 @@ export function AppointmentsPage() {
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Form method="get" className="flex items-center gap-2">
-            <AppointmentDatePicker value={date} onChange={handleDateChange} />
+            <AppointmentDatePicker
+              key={date}
+              appointmentDates={appointmentDates}
+              calendarMonth={calendarMonth}
+              value={date}
+              onChange={handleDateChange}
+            />
             <Input name="date" type="hidden" value={date} />
             <Button type="submit" variant="outline" size="sm">
               <CalendarClock className="size-4" />
@@ -170,13 +179,52 @@ export function AppointmentsPage() {
 }
 
 function AppointmentDatePicker({
+  appointmentDates,
+  calendarMonth,
   onChange,
   value,
 }: {
+  appointmentDates: string[];
+  calendarMonth: string;
   onChange: (value: string) => void;
   value: string;
 }) {
   const selectedDate = dateStringToDate(value);
+  const [visibleMonth, setVisibleMonth] = React.useState(() =>
+    startOfMonth(selectedDate),
+  );
+  const dateFetcher = useFetcher<AppointmentsLoaderData>();
+  const visibleMonthDate = dateToDateString(startOfMonth(visibleMonth));
+  const loadedAppointmentDates = React.useMemo(() => {
+    if (dateFetcher.data?.calendarMonth === visibleMonthDate) {
+      return dateFetcher.data.appointmentDates;
+    }
+
+    if (calendarMonth === visibleMonthDate) {
+      return appointmentDates;
+    }
+
+    return [];
+  }, [
+    appointmentDates,
+    calendarMonth,
+    dateFetcher.data?.appointmentDates,
+    dateFetcher.data?.calendarMonth,
+    visibleMonthDate,
+  ]);
+  const appointmentDateSet = React.useMemo(
+    () => new Set(loadedAppointmentDates),
+    [loadedAppointmentDates],
+  );
+
+  function handleMonthChange(month: Date) {
+    const nextVisibleMonth = startOfMonth(month);
+
+    setVisibleMonth(nextVisibleMonth);
+    void dateFetcher.load(
+      `/appointments?date=${value}&month=${dateToDateString(nextVisibleMonth)}`,
+    );
+  }
 
   return (
     <Popover modal="trap-focus">
@@ -196,7 +244,17 @@ function AppointmentDatePicker({
       <PopoverContent align="end" className="w-auto p-0">
         <Calendar
           mode="single"
+          month={visibleMonth}
+          components={{
+            DayButton: (props) => (
+              <AppointmentCalendarDayButton
+                {...props}
+                appointmentDateSet={appointmentDateSet}
+              />
+            ),
+          }}
           selected={selectedDate}
+          onMonthChange={handleMonthChange}
           onSelect={(nextDate) => {
             if (nextDate) {
               onChange(dateToDateString(nextDate));
@@ -205,6 +263,24 @@ function AppointmentDatePicker({
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+function AppointmentCalendarDayButton({
+  appointmentDateSet,
+  ...props
+}: DayButtonProps & { appointmentDateSet: Set<string> }) {
+  const hasAppointments = appointmentDateSet.has(dateToDateString(props.day.date));
+
+  return (
+    <CalendarDayButton
+      {...props}
+      className={cn(
+        props.className,
+        hasAppointments &&
+          "after:absolute after:bottom-0.5 after:left-1/2 after:size-1 after:-translate-x-1/2 after:rounded-full after:bg-primary data-[selected-single=true]:after:bg-primary-foreground",
+      )}
+    />
   );
 }
 
@@ -712,6 +788,10 @@ function getWeekday(date: string) {
 
 function dateStringToDate(value: string) {
   return new Date(`${value}T00:00:00`);
+}
+
+function startOfMonth(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), 1);
 }
 
 function dateToDateString(value: Date) {

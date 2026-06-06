@@ -502,12 +502,53 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
 });
 
 legacyRouter.get("/appointments", requireAuth, requireClient, async (req, res, next) => {
-  if (typeof req.query.date !== "string") {
+  if (
+    typeof req.query.date !== "string" &&
+    (typeof req.query.start !== "string" || typeof req.query.end !== "string")
+  ) {
     next();
     return;
   }
 
   try {
+    if (typeof req.query.start === "string" && typeof req.query.end === "string") {
+      const startDate = req.query.start.trim();
+      const endDate = req.query.end.trim();
+
+      if (!isDateString(startDate) || !isDateString(endDate)) {
+        res.status(400).json({
+          error: "Validation failed",
+          errors: { date: "Use YYYY-MM-DD start and end dates." }
+        });
+        return;
+      }
+
+      const start = dateAndTimeToDate(startDate, "00:00");
+      const end = addMinutes(dateAndTimeToDate(endDate, "00:00"), 24 * 60);
+      const rows = await db
+        .select({ startsAt: appointments.startsAt })
+        .from(appointments)
+        .where(
+          and(
+            eq(appointments.clientId, req.user.clientId),
+            gte(appointments.startsAt, start),
+            lt(appointments.startsAt, end)
+          )
+        )
+        .orderBy(asc(appointments.startsAt));
+
+      res.json({
+        appointmentDates: Array.from(
+          new Set(
+            rows.map((row) =>
+              formatDate(row.startsAt instanceof Date ? row.startsAt : new Date(row.startsAt))
+            )
+          )
+        )
+      });
+      return;
+    }
+
     const date = req.query.date.trim();
 
     if (!isDateString(date)) {
