@@ -114,6 +114,7 @@ Fonio can use `{{practiceName}}`, `{{customer.firstName}}`, and the `availableSl
 If the caller is recognized, `upcomingAppointments` is also returned so cancellation can start immediately.
 After the caller confirms a slot, Fonio should ask whether they want to join the waitlist for an earlier appointment if someone cancels.
 Use the `waitlist` object to avoid asking again when the caller is already on the waitlist.
+`booking.joinWaitlist` is optional and defaults to `false`. Only send `true` if the caller explicitly agrees.
 
 For dynamic availability lookup during the call, use:
 
@@ -319,7 +320,7 @@ Example request body:
     "title": "First consultation",
     "appointmentType": "Consultation",
     "notes": "Booked by Fonio during inbound call",
-    "joinWaitlist": true
+    "joinWaitlist": false
   },
   "status": "booked",
   "direction": "inbound"
