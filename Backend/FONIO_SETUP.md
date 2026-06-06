@@ -105,6 +105,7 @@ Example response:
 ```
 
 Fonio can use `{{practiceName}}`, `{{customer.firstName}}`, and the `availableSlots` array directly in the prompt.
+If the caller is recognized, `upcomingAppointments` is also returned so cancellation can start immediately.
 
 For dynamic availability lookup during the call, use:
 
@@ -158,6 +159,82 @@ Supported `timeOfDay` values:
 - `morning`
 - `afternoon`
 - `evening`
+
+For looking up the caller's cancellable appointments during the call, use:
+
+- `POST /api/fonio/inbound-upcoming-appointments`
+
+Example request body:
+
+```json
+{
+  "fromNumber": "+436641234567",
+  "toNumber": "+43123456789"
+}
+```
+
+Example response:
+
+```json
+{
+  "handled": true,
+  "clientId": "actual-client-id",
+  "practiceName": "Praxis Mueller",
+  "callerPhone": "+436641234567",
+  "calledNumber": "+43123456789",
+  "customer": {
+    "id": "customer-id",
+    "name": "Anna Mueller",
+    "firstName": "Anna",
+    "lastName": "Mueller"
+  },
+  "appointments": [
+    {
+      "id": "appointment-id",
+      "title": "Check-up",
+      "startsAt": "2026-06-23T09:00:00.000Z",
+      "endsAt": "2026-06-23T09:30:00.000Z",
+      "status": "confirmed"
+    }
+  ],
+  "promptHints": {
+    "hasUpcomingAppointments": true,
+    "reason": null
+  }
+}
+```
+
+For cancellation confirmation during the call, use:
+
+- `POST /api/fonio/inbound-cancel`
+
+Example request body:
+
+```json
+{
+  "fromNumber": "+436641234567",
+  "toNumber": "+43123456789",
+  "cancellation": {
+    "appointmentId": "appointment-id",
+    "reason": "Caller requested cancellation"
+  },
+  "status": "cancelled",
+  "direction": "inbound"
+}
+```
+
+Success response:
+
+```json
+{
+  "handled": true,
+  "mode": "inbound_cancellation",
+  "clientId": "actual-client-id",
+  "appointmentId": "appointment-id",
+  "status": "cancelled",
+  "releasedSlotId": "slot-id"
+}
+```
 
 For the booking confirmation step during or after the call, use:
 
@@ -214,10 +291,11 @@ For manual availability checks or future agent flows, keep:
 
 - `GET /api/fonio/availability?clientId=<id>&from=<iso>&to=<iso>`
 
-Optional security:
+Authentication:
 
-- set `FONIO_SHARED_SECRET`
-- Fonio sends it as `x-fonio-secret`
+- create the Fonio API key in the frontend settings page
+- send it on every Fonio request as `Authorization: Bearer <api-key>`
+- every `/api/fonio/*` endpoint requires a valid client-scoped API key
 
 Response:
 
@@ -256,6 +334,14 @@ The safer flow is:
 6. When the caller confirms one exact slot, Fonio calls `POST /api/fonio/inbound-booking`.
 7. We create the customer if needed and book the slot atomically.
 8. Fonio confirms success to the caller only after the booking API succeeds.
+
+For cancellation, the flow is:
+
+1. Fonio reads `upcomingAppointments` from `POST /api/fonio/inbound-context`, or calls `POST /api/fonio/inbound-upcoming-appointments`.
+2. The caller confirms which exact appointment should be cancelled.
+3. Fonio calls `POST /api/fonio/inbound-cancel`.
+4. The backend cancels the appointment and releases the linked slot.
+5. If the caller wants to rebook, Fonio continues with `POST /api/fonio/inbound-search-slots` and `POST /api/fonio/inbound-booking`.
 
 ## Current MVP Limits
 

@@ -7,6 +7,7 @@ import {
   CalendarClock,
   ChevronsUpDown,
   CreditCard,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   RefreshCw,
@@ -71,6 +72,11 @@ const navItems = [
     title: "Clients",
     url: "/clients",
     icon: UsersRound,
+  },
+  {
+    title: "Settings",
+    url: "/settings",
+    icon: KeyRound,
   },
 ];
 
