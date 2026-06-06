@@ -1035,6 +1035,15 @@ legacyRouter.patch("/appointments/:id/cancel", requireAuth, requireClient, async
       return;
     }
 
+    if (appointment.cancelReason !== (cancellationReason || null)) {
+      await db
+        .update(appointments)
+        .set({
+          cancelReason: cancellationReason || null,
+          updatedAt: new Date()
+        })
+        .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.id, req.params.id)));
+    }
     const mappedAppointment = await readLegacyAppointment(req.user.clientId, req.params.id);
 
     res.json({
