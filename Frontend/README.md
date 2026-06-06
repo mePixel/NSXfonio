@@ -2,6 +2,20 @@
 
 This is a template for a new Vite project with React, TypeScript, and shadcn/ui.
 
+## Environment
+
+Copy `.env.example` to `.env` and set the backend origin:
+
+```bash
+VITE_API_URL=http://localhost:3005
+```
+
+For production, point the frontend at the API domain:
+
+```bash
+VITE_API_URL=https://api-nsxfonio.xaxa.at
+```
+
 ## Adding components
 
 To add components to your app, run the following command:

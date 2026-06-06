@@ -10,20 +10,24 @@ export const app = express();
 
 app.set("trust proxy", 1);
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || env.clientOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin || env.clientOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
 
-      callback(new Error(`Origin ${origin} is not allowed by CORS`));
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    credentials: true
-  })
+    callback(null, false);
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  credentials: true
+};
+
+app.use(
+  cors(corsOptions)
 );
+
+app.options("/{*path}", cors(corsOptions));
 
 app.use(helmet());
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
