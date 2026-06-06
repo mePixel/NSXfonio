@@ -42,5 +42,11 @@ export const env = {
   clientOrigins,
   fonioApiKey: process.env.API_FONIO,
   fonioFromNumber: process.env.FONIO_FROM_NUMBER,
-  fonioAgentId: process.env.FONIO_AGENT_ID
+  fonioAgentId: process.env.FONIO_AGENT_ID,
+  smtpHost: process.env.SMTP_HOST,
+  smtpPort: process.env.SMTP_PORT || "587",
+  smtpSecure: process.env.SMTP_SECURE || "false",
+  smtpUser: process.env.SMTP_USER,
+  smtpPassword: process.env.SMTP_PASSWORD,
+  smtpFromEmail: process.env.SMTP_FROM_EMAIL || "noreply@nsxfonio.com"
 };
