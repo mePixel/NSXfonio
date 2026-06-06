@@ -3,6 +3,8 @@ import { requireAuth, requireClient } from "../../lib/middleware.js";
 import { isoDate, str, uuid } from "../../lib/sanitize.js";
 import * as service from "./appointments.service.js";
 import { transitionStatus } from "./status.service.js";
+import { triggerConfirmationCall } from "../fonio/fonio.service.js";
+import { getCustomer } from "../customers/customers.service.js";
 
 export const appointmentsRouter = Router();
 
@@ -155,6 +157,38 @@ appointmentsRouter.patch("/:id", async (req, res, next) => {
       return;
     }
     res.json(appointment);
+  } catch (error) {
+    next(error);
+  }
+});
+
+appointmentsRouter.post("/:id/trigger-call", async (req, res, next) => {
+  try {
+    const id = uuid(req.params.id);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+
+    const appointment = await service.getAppointment(req.user.clientId, id);
+    if (!appointment) {
+      res.status(404).json({ error: "Appointment not found" });
+      return;
+    }
+
+    const customer = await getCustomer(req.user.clientId, appointment.customerId);
+    if (!customer) {
+      res.status(404).json({ error: "Customer not found" });
+      return;
+    }
+
+    const result = await triggerConfirmationCall(
+      req.user.clientId,
+      appointment,
+      customer,
+      { userId: req.user.id }
+    );
+    res.json(result);
   } catch (error) {
     next(error);
   }

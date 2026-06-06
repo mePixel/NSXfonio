@@ -22,6 +22,13 @@ export function uuid(value) {
   return UUID_RE.test(value) ? value : null;
 }
 
+// Validates an integer. Returns undefined if out of range or not an integer.
+export function int(value, { min = 1, max = 99999 } = {}) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) return undefined;
+  return n;
+}
+
 // Parses an ISO 8601 date string into a Date object.
 // Returns null if the value is explicitly null (clears a nullable field).
 // Returns undefined if the value is missing or invalid.

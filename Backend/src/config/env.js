@@ -39,5 +39,8 @@ export const env = {
   googleClientId: process.env.GOOGLE_CLIENT_ID,
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
   databaseUrl: process.env.DATABASE_URL || "postgres://nsxfonio:nsxfonio@localhost:5432/nsxfonio",
-  clientOrigins
+  clientOrigins,
+  fonioApiKey: process.env.API_FONIO,
+  fonioFromNumber: process.env.FONIO_FROM_NUMBER,
+  fonioAgentId: process.env.FONIO_AGENT_ID
 };
