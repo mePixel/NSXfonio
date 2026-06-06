@@ -41,7 +41,8 @@ export const waitlistOfferStatusEnum = pgEnum("waitlist_offer_status", [
 
 export const communicationChannelEnum = pgEnum("communication_channel", [
   "call",
-  "whatsapp"
+  "whatsapp",
+  "email"
 ]);
 
 export const communicationDirectionEnum = pgEnum("communication_direction", [

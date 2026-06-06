@@ -1,9 +1,11 @@
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { webhookEvents, waitlistOffers } from "../../db/schema.js";
+import { webhookEvents, waitlistOffers, customers, waitingListEntries, communicationLogs } from "../../db/schema.js";
 import { advanceOfferCycle } from "../waitlist/offers.service.js";
 import { handleInboundAppointmentWebhook, isInboundAppointmentWebhook } from "./fonio.inbound.service.js";
+import { sendNoAnswerFollowupEmail } from "../email/email.service.js";
+import { getSlot } from "../slots/slots.service.js";
 
 async function storeWebhookEvent(payload) {
   const externalEventId = payload?.callId ?? payload?.id ?? null;
@@ -52,6 +54,45 @@ async function handleOutboundWebhook(payload) {
     await db.update(waitlistOffers)
       .set({ status: "call_no_answer", updatedAt: new Date() })
       .where(eq(waitlistOffers.id, offerId));
+
+    // Send follow-up email to customer
+    try {
+      const [entry] = await db
+        .select()
+        .from(waitingListEntries)
+        .where(eq(waitingListEntries.id, offer.waitingListEntryId));
+
+      if (entry) {
+        const [customer] = await db
+          .select()
+          .from(customers)
+          .where(eq(customers.id, entry.customerId));
+
+        if (customer) {
+          const slot = await getSlot(offer.clientId, offer.slotId);
+          const emailResult = await sendNoAnswerFollowupEmail(customer, offer, slot);
+          
+          // Log the email communication attempt
+          await db.insert(communicationLogs).values({
+            id: randomUUID(),
+            clientId: offer.clientId,
+            waitlistOfferId: offer.id,
+            customerId: customer.id,
+            channel: "email",
+            direction: "outbound",
+            eventType: "no_answer_followup_email",
+            status: emailResult.sent ? "sent" : "failed",
+            externalRef: emailResult.messageId ? JSON.stringify({ messageId: emailResult.messageId }) : null
+          }).catch(err => {
+            console.warn("[fonio webhook] Failed to log email communication:", err);
+          });
+        }
+      }
+    } catch (error) {
+      console.error("[fonio webhook] Error sending follow-up email:", error);
+      // Continue with the offer cycle even if email fails
+    }
+
     await advanceOfferCycle(offer.clientId, offerId);
     return { handled: true, mode: "outbound", outcome: "call_no_answer", offerId };
   }
