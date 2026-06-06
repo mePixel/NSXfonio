@@ -1,5 +1,64 @@
 import { relations } from "drizzle-orm";
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex
+} from "drizzle-orm/pg-core";
+
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+export const appointmentStatusEnum = pgEnum("appointment_status", [
+  "scheduled",
+  "confirmation_pending",
+  "confirmed",
+  "followup_sent",
+  "cancel_pending",
+  "cancelled",
+  "completed",
+  "no_show"
+]);
+
+export const slotStatusEnum = pgEnum("slot_status", [
+  "available",
+  "booked",
+  "blocked"
+]);
+
+export const waitlistOfferStatusEnum = pgEnum("waitlist_offer_status", [
+  "pending",
+  "calling",
+  "call_no_answer",
+  "whatsapp_sent",
+  "accepted",
+  "declined",
+  "timed_out"
+]);
+
+export const communicationChannelEnum = pgEnum("communication_channel", [
+  "call",
+  "whatsapp"
+]);
+
+export const communicationDirectionEnum = pgEnum("communication_direction", [
+  "outbound",
+  "inbound"
+]);
+
+// ── Clients (defined first so user can reference it) ─────────────────────────
+
+export const clients = pgTable("clients", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow()
+});
+
+// ── Better Auth tables ────────────────────────────────────────────────────────
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -7,6 +66,7 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  clientId: text("client_id").references(() => clients.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull()
 });
@@ -25,9 +85,7 @@ export const session = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" })
   },
-  (table) => [
-    index("session_user_id_idx").on(table.userId)
-  ]
+  (table) => [index("session_user_id_idx").on(table.userId)]
 );
 
 export const account = pgTable(
@@ -68,20 +126,70 @@ export const verification = pgTable(
   (table) => [index("verification_identifier_idx").on(table.identifier)]
 );
 
-export const clients = pgTable(
-  "clients",
+// ── Customers ─────────────────────────────────────────────────────────────────
+
+export const customers = pgTable(
+  "customers",
   {
     id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
-    telephoneNumber: text("telephone_number").notNull(),
-    email: text("email").notNull(),
-    description: text("description").notNull().default(""),
-    createdAt: timestamp("created_at").notNull(),
-    updatedAt: timestamp("updated_at").notNull()
+    phone: text("phone"),
+    whatsappPhone: text("whatsapp_phone"),
+    email: text("email"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
   },
-  (table) => [index("clients_created_at_idx").on(table.createdAt)]
+  (table) => [index("customers_client_id_idx").on(table.clientId)]
 );
+
+// ── Schedules and slots ───────────────────────────────────────────────────────
+
+export const schedules = pgTable(
+  "schedules",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    dayOfWeek: integer("day_of_week").notNull(), // 0=Sunday … 6=Saturday
+    startTime: text("start_time").notNull(),     // "09:00"
+    endTime: text("end_time").notNull(),         // "17:00"
+    slotDurationMinutes: integer("slot_duration_minutes").notNull().default(30),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
+  },
+  (table) => [index("schedules_client_id_idx").on(table.clientId)]
+);
+
+export const slots = pgTable(
+  "slots",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    scheduleId: text("schedule_id").references(() => schedules.id, { onDelete: "set null" }),
+    startsAt: timestamp("starts_at").notNull(),
+    endsAt: timestamp("ends_at").notNull(),
+    status: slotStatusEnum("status").notNull().default("available"),
+    // No FK here to avoid circular reference with appointments — managed at app level
+    appointmentId: text("appointment_id"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("slots_client_id_idx").on(table.clientId),
+    index("slots_status_idx").on(table.status),
+    index("slots_starts_at_idx").on(table.startsAt)
+  ]
+);
+
+// ── Appointments ──────────────────────────────────────────────────────────────
 
 export const appointments = pgTable(
   "appointments",
@@ -89,61 +197,220 @@ export const appointments = pgTable(
     id: text("id").primaryKey(),
     clientId: text("client_id")
       .notNull()
-      .references(() => clients.id, { onDelete: "restrict" }),
-    appointmentDate: text("appointment_date").notNull(),
-    timeSlot: text("time_slot").notNull(),
-    status: text("status").notNull().default("scheduled"),
-    moreInfo: text("more_info").notNull().default(""),
-    cancellationReason: text("cancellation_reason"),
-    createdAt: timestamp("created_at").notNull(),
-    updatedAt: timestamp("updated_at").notNull(),
-    cancelledAt: timestamp("cancelled_at")
+      .references(() => clients.id, { onDelete: "cascade" }),
+    customerId: text("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    slotId: text("slot_id").references(() => slots.id, { onDelete: "set null" }),
+    title: text("title").notNull(),
+    startsAt: timestamp("starts_at").notNull(),
+    endsAt: timestamp("ends_at").notNull(),
+    status: appointmentStatusEnum("status").notNull().default("scheduled"),
+    confirmationDeadlineAt: timestamp("confirmation_deadline_at"),
+    followupDeadlineAt: timestamp("followup_deadline_at"),
+    cancelReason: text("cancel_reason"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
   },
   (table) => [
-    index("appointments_date_time_idx").on(table.appointmentDate, table.timeSlot),
-    index("appointments_client_id_idx").on(table.clientId)
+    index("appointments_client_id_idx").on(table.clientId),
+    index("appointments_customer_id_idx").on(table.customerId),
+    index("appointments_status_idx").on(table.status)
   ]
 );
 
-export const appointmentSettings = pgTable("appointment_settings", {
-  id: text("id").primaryKey(),
-  timeSlotSize: integer("time_slot_size").notNull(),
-  workingDays: text("working_days").notNull(),
-  officeHoursStart: text("office_hours_start").notNull().default("08:00"),
-  officeHoursEnd: text("office_hours_end").notNull().default("17:00"),
-  createdAt: timestamp("created_at").notNull(),
-  updatedAt: timestamp("updated_at").notNull()
-});
+// ── Waiting list ──────────────────────────────────────────────────────────────
 
-export const userRelations = relations(user, ({ many }) => ({
+export const waitingListEntries = pgTable(
+  "waiting_list_entries",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    customerId: text("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("waiting_list_entries_client_id_idx").on(table.clientId),
+    index("waiting_list_entries_client_position_idx").on(table.clientId, table.position)
+  ]
+);
+
+export const waitlistOffers = pgTable(
+  "waitlist_offers",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    slotId: text("slot_id")
+      .notNull()
+      .references(() => slots.id, { onDelete: "cascade" }),
+    waitingListEntryId: text("waiting_list_entry_id")
+      .notNull()
+      .references(() => waitingListEntries.id, { onDelete: "cascade" }),
+    status: waitlistOfferStatusEnum("status").notNull().default("pending"),
+    responseDeadlineAt: timestamp("response_deadline_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("waitlist_offers_slot_id_idx").on(table.slotId),
+    index("waitlist_offers_status_idx").on(table.status)
+  ]
+);
+
+// ── Communication logs ────────────────────────────────────────────────────────
+
+export const communicationLogs = pgTable(
+  "communication_logs",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    appointmentId: text("appointment_id"),
+    customerId: text("customer_id").references(() => customers.id, { onDelete: "set null" }),
+    waitlistOfferId: text("waitlist_offer_id"),
+    channel: communicationChannelEnum("channel").notNull(),
+    direction: communicationDirectionEnum("direction").notNull(),
+    eventType: text("event_type").notNull(),
+    status: text("status"),
+    externalMessageId: text("external_message_id"),
+    externalCallId: text("external_call_id"),
+    externalRef: text("external_ref"),
+    payloadJson: text("payload_json"),
+    occurredAt: timestamp("occurred_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("communication_logs_client_id_idx").on(table.clientId),
+    index("communication_logs_appointment_id_idx").on(table.appointmentId),
+    index("communication_logs_waitlist_offer_id_idx").on(table.waitlistOfferId)
+  ]
+);
+
+// ── Webhook events ────────────────────────────────────────────────────────────
+
+export const webhookEvents = pgTable(
+  "webhook_events",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    eventType: text("event_type").notNull(),
+    externalEventId: text("external_event_id").unique(),
+    payloadJson: text("payload_json").notNull(),
+    receivedAt: timestamp("received_at").notNull().defaultNow(),
+    processedAt: timestamp("processed_at"),
+    processingStatus: text("processing_status").notNull().default("pending")
+  },
+  (table) => [
+    index("webhook_events_external_event_id_idx").on(table.externalEventId),
+    index("webhook_events_processing_status_idx").on(table.processingStatus)
+  ]
+);
+
+// ── Audit logs ────────────────────────────────────────────────────────────────
+
+export const auditLogs = pgTable(
+  "audit_logs",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id").references(() => clients.id, { onDelete: "set null" }),
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    appointmentId: text("appointment_id"),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    action: text("action").notNull(),
+    fromState: text("from_state"),
+    toState: text("to_state"),
+    reason: text("reason"),
+    metadataJson: text("metadata_json"),
+    createdAt: timestamp("created_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("audit_logs_client_id_idx").on(table.clientId),
+    index("audit_logs_entity_idx").on(table.entityType, table.entityId)
+  ]
+);
+
+// ── Relations ─────────────────────────────────────────────────────────────────
+
+export const clientRelations = relations(clients, ({ many }) => ({
+  users: many(user),
+  customers: many(customers),
+  schedules: many(schedules),
+  slots: many(slots),
+  appointments: many(appointments),
+  waitingListEntries: many(waitingListEntries),
+  waitlistOffers: many(waitlistOffers),
+  communicationLogs: many(communicationLogs),
+  auditLogs: many(auditLogs)
+}));
+
+export const userRelations = relations(user, ({ one, many }) => ({
+  client: one(clients, { fields: [user.clientId], references: [clients.id] }),
   sessions: many(session),
   accounts: many(account)
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({
-  user: one(user, {
-    fields: [session.userId],
-    references: [user.id]
-  })
+  user: one(user, { fields: [session.userId], references: [user.id] })
 }));
 
 export const accountRelations = relations(account, ({ one }) => ({
-  user: one(user, {
-    fields: [account.userId],
-    references: [user.id]
-  })
+  user: one(user, { fields: [account.userId], references: [user.id] })
 }));
 
-export const clientRelations = relations(clients, ({ many }) => ({
-  appointments: many(appointments)
+export const customerRelations = relations(customers, ({ one, many }) => ({
+  client: one(clients, { fields: [customers.clientId], references: [clients.id] }),
+  appointments: many(appointments),
+  waitingListEntries: many(waitingListEntries),
+  communicationLogs: many(communicationLogs)
 }));
 
-export const appointmentRelations = relations(appointments, ({ one }) => ({
-  client: one(clients, {
-    fields: [appointments.clientId],
-    references: [clients.id]
-  })
+export const scheduleRelations = relations(schedules, ({ one, many }) => ({
+  client: one(clients, { fields: [schedules.clientId], references: [clients.id] }),
+  slots: many(slots)
 }));
+
+export const slotRelations = relations(slots, ({ one, many }) => ({
+  client: one(clients, { fields: [slots.clientId], references: [clients.id] }),
+  schedule: one(schedules, { fields: [slots.scheduleId], references: [schedules.id] }),
+  waitlistOffers: many(waitlistOffers)
+}));
+
+export const appointmentRelations = relations(appointments, ({ one, many }) => ({
+  client: one(clients, { fields: [appointments.clientId], references: [clients.id] }),
+  customer: one(customers, { fields: [appointments.customerId], references: [customers.id] }),
+  slot: one(slots, { fields: [appointments.slotId], references: [slots.id] }),
+  communicationLogs: many(communicationLogs)
+}));
+
+export const waitingListEntryRelations = relations(waitingListEntries, ({ one, many }) => ({
+  client: one(clients, { fields: [waitingListEntries.clientId], references: [clients.id] }),
+  customer: one(customers, { fields: [waitingListEntries.customerId], references: [customers.id] }),
+  waitlistOffers: many(waitlistOffers)
+}));
+
+export const waitlistOfferRelations = relations(waitlistOffers, ({ one, many }) => ({
+  client: one(clients, { fields: [waitlistOffers.clientId], references: [clients.id] }),
+  slot: one(slots, { fields: [waitlistOffers.slotId], references: [slots.id] }),
+  waitingListEntry: one(waitingListEntries, {
+    fields: [waitlistOffers.waitingListEntryId],
+    references: [waitingListEntries.id]
+  }),
+  communicationLogs: many(communicationLogs)
+}));
+
+// ── Schema export (used by Better Auth adapter and drizzle) ───────────────────
 
 export const schema = {
   user,
@@ -151,11 +418,23 @@ export const schema = {
   account,
   verification,
   clients,
+  customers,
+  schedules,
+  slots,
   appointments,
-  appointmentSettings,
+  waitingListEntries,
+  waitlistOffers,
+  communicationLogs,
+  webhookEvents,
+  auditLogs,
   userRelations,
   sessionRelations,
   accountRelations,
   clientRelations,
-  appointmentRelations
+  customerRelations,
+  scheduleRelations,
+  slotRelations,
+  appointmentRelations,
+  waitingListEntryRelations,
+  waitlistOfferRelations
 };

@@ -67,12 +67,21 @@ export function AppointmentsPage() {
     fetcher.data?.intent === "createAppointment" ? fetcher.data : null;
   const fieldErrors = createResult?.ok === false ? createResult.errors : {};
   const formError = createResult?.ok === false ? createResult.message : null;
-  const activeAppointments = appointments.filter(
+  const selectedDateAppointments = appointments.filter(
+    (appointment) => appointment.appointmentDate === date,
+  );
+  const activeAppointments = selectedDateAppointments.filter(
     (appointment) => appointment.status !== "cancelled",
   );
   const bookedSlots = new Set(
     activeAppointments.map((appointment) => appointment.timeSlot),
   );
+
+  function handleDateChange(nextDate: string) {
+    if (nextDate !== date) {
+      void navigate(`/appointments?date=${nextDate}`);
+    }
+  }
 
   React.useEffect(() => {
     if (fetcher.state === "idle" && createResult?.ok) {
@@ -105,13 +114,8 @@ export function AppointmentsPage() {
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Form method="get" className="flex items-center gap-2">
-            <Input
-              aria-label="Appointment date"
-              className="w-40"
-              name="date"
-              type="date"
-              defaultValue={date}
-            />
+            <AppointmentDatePicker value={date} onChange={handleDateChange} />
+            <Input name="date" type="hidden" value={date} />
             <Button type="submit" variant="outline" size="sm">
               <CalendarClock className="size-4" />
               View
@@ -154,14 +158,53 @@ export function AppointmentsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {appointments.length > 0 ? (
-            <AppointmentsTable appointments={appointments} />
+          {selectedDateAppointments.length > 0 ? (
+            <AppointmentsTable appointments={selectedDateAppointments} />
           ) : (
             <EmptyAppointmentsState onCreate={() => setOpen(true)} />
           )}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function AppointmentDatePicker({
+  onChange,
+  value,
+}: {
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const selectedDate = dateStringToDate(value);
+
+  return (
+    <Popover modal="trap-focus">
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Filter appointments by date"
+          />
+        }
+      >
+        <CalendarDays className="size-4" />
+        {formatLongDate(value)}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto p-0">
+        <Calendar
+          mode="single"
+          selected={selectedDate}
+          onSelect={(nextDate) => {
+            if (nextDate) {
+              onChange(dateToDateString(nextDate));
+            }
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 

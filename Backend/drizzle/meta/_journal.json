@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1780748458931,
+      "tag": "0000_violet_earthquake",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780748460000,
+      "tag": "0001_create_clients",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780748461000,
+      "tag": "0002_create_appointments",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780748462000,
+      "tag": "0003_add_office_hours_to_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780748463000,
+      "tag": "0004_migrate_to_modular_schema",
+      "breakpoints": true
+    }
+  ]
+}
