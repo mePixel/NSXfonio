@@ -118,7 +118,11 @@ export function AppointmentsPage() {
 
       toast.success("Appointment created", {
         description: patientName
-          ? `${patientName} on ${createdAppointment!.timeSlot}`
+          ? createResult.waitlist?.created
+            ? `${patientName} on ${createdAppointment!.timeSlot}. Added to waitlist at position ${createResult.waitlist.position}.`
+            : createResult.waitlist
+              ? `${patientName} on ${createdAppointment!.timeSlot}. Already on waitlist at position ${createResult.waitlist.position}.`
+              : `${patientName} on ${createdAppointment!.timeSlot}`
           : undefined,
       });
 
@@ -527,6 +531,22 @@ function CreateAppointmentPopover({
             name="moreInfo"
             placeholder="Reason for visit, preparation notes, or context"
           />
+
+          <label className="flex items-start gap-3 rounded-md border bg-muted/20 px-3 py-3 text-sm">
+            <input
+              className="mt-0.5 size-4 rounded border-input"
+              name="joinWaitlist"
+              type="checkbox"
+            />
+            <span className="grid gap-1">
+              <span className="font-medium text-foreground">
+                Add this patient to the waitlist for earlier times
+              </span>
+              <span className="text-xs text-muted-foreground">
+                If someone cancels, they can be contacted for an earlier appointment.
+              </span>
+            </span>
+          </label>
 
           <div className="flex items-center justify-end gap-2 pt-1">
             <Button
