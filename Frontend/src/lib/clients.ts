@@ -9,6 +9,12 @@ export type Client = {
   telephoneNumber: string;
   email: string;
   description: string;
+  waitlist: {
+    isOnWaitlist: boolean;
+    entryId: string | null;
+    position: number | null;
+    notes: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };

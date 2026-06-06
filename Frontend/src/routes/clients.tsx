@@ -284,12 +284,13 @@ function ClientsTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+      <table className="w-full min-w-[820px] border-collapse text-left text-sm">
         <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
           <tr>
             <th className="px-4 py-3 font-medium">Name</th>
             <th className="px-4 py-3 font-medium">Telephone</th>
             <th className="px-4 py-3 font-medium">Email</th>
+            <th className="px-4 py-3 font-medium">Waitlist</th>
             <th className="px-4 py-3 font-medium">Description</th>
             <th className="px-4 py-3 font-medium">Created</th>
             <th className="w-12 px-4 py-3 font-medium">
@@ -333,6 +334,9 @@ function ClientsTable({
                   </a>
                 </div>
               </td>
+              <td className="px-4 py-3">
+                <WaitlistStatus client={client} />
+              </td>
               <td className="max-w-64 px-4 py-3 text-muted-foreground">
                 <span className="line-clamp-2">
                   {client.description || "No description"}
@@ -349,6 +353,22 @@ function ClientsTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function WaitlistStatus({ client }: { client: Client }) {
+  if (!client.waitlist?.isOnWaitlist) {
+    return (
+      <span className="inline-flex h-6 items-center rounded-md border px-2 text-xs font-medium text-muted-foreground">
+        No
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex h-6 items-center rounded-md border border-amber-300 bg-amber-50 px-2 text-xs font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+      Queue #{client.waitlist.position ?? "-"}
+    </span>
   );
 }
 
