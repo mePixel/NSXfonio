@@ -9,6 +9,8 @@ import { getSlot } from "../slots/slots.service.js";
 
 const ACTIVE_STATUSES  = ["pending", "calling", "call_no_answer", "whatsapp_sent"];
 const DEFAULT_DEADLINE_MINUTES = 60;
+const CANCELLED_SLOT_OPENING_PROMPT =
+  "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept.";
 
 // Finds the next waitlist entry that has not yet been offered (or all previous offers are terminal).
 async function getNextEntry(clientId, slotId) {
@@ -100,6 +102,18 @@ export async function moveWaitlistEntryToEnd(clientId, waitingListEntryId) {
   });
 }
 
+function buildCancelledSlotCallContext(slot, customer, offer) {
+  return {
+    name: `${customer.firstName} ${customer.lastName}`,
+    slotId: slot.id,
+    slotStartsAt: slot.startsAt?.toISOString?.() ?? slot.startsAt,
+    slotEndsAt: slot.endsAt?.toISOString?.() ?? slot.endsAt,
+    offerId: offer.id,
+    scenario: "cancelled_slot_waitlist_offer",
+    openingPrompt: CANCELLED_SLOT_OPENING_PROMPT
+  };
+}
+
 async function callEntry(clientId, slot, entry, offer) {
   const customer = await getCustomer(clientId, entry.customerId);
   if (!customer?.phone) {
@@ -122,11 +136,7 @@ async function callEntry(clientId, slot, entry, offer) {
   try {
     result = await triggerOutboundCall({
       toNumber: customer.phone,
-      context: {
-        name: `${customer.firstName} ${customer.lastName}`,
-        slotId: slot.id,
-        offerId: offer.id
-      }
+      context: buildCancelledSlotCallContext(slot, customer, offer)
     });
   } catch (error) {
     await db.update(communicationLogs)

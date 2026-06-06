@@ -227,6 +227,22 @@ Waitlist offer rule:
 - they are not offered that same freed slot again
 - the system immediately advances to the next eligible waitlist entry for that slot
 
+When a cancellation releases a slot, the backend triggers an outbound waitlist call with this Fonio `context`:
+
+```json
+{
+  "name": "Anna Mueller",
+  "slotId": "slot-1",
+  "slotStartsAt": "2026-06-23T09:00:00.000Z",
+  "slotEndsAt": "2026-06-23T09:30:00.000Z",
+  "offerId": "waitlist-offer-id",
+  "scenario": "cancelled_slot_waitlist_offer",
+  "openingPrompt": "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept."
+}
+```
+
+The Fonio agent should branch on `scenario === "cancelled_slot_waitlist_offer"` and use `openingPrompt`, `name`, `slotStartsAt`, and `slotEndsAt` in the first turn.
+
 For looking up the caller's cancellable appointments during the call, use:
 
 - `POST /api/fonio/inbound-upcoming-appointments`
