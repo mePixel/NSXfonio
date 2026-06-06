@@ -698,7 +698,7 @@ function AppointmentRow({
     if (fetcher.state === "idle" && cancelResult?.ok && cancelResult !== prevCancelResultRef.current) {
       prevCancelResultRef.current = cancelResult;
       toast.success("Appointment cancelled", {
-        description: patientName ? `${patientName} at ${timeSlot}` : undefined,
+        description: getCancellationToastDescription(cancelResult, patientName, timeSlot),
       });
     }
   }, [cancelResult, fetcher.state, patientName, timeSlot]);
@@ -886,6 +886,27 @@ function FormAlert({ message }: { message: string }) {
       {message}
     </p>
   );
+}
+
+function getCancellationToastDescription(
+  result: Extract<AppointmentActionResult, { intent: "cancelAppointment" }> | null,
+  patientName: string,
+  timeSlot: string,
+) {
+  const appointmentDescription = patientName ? `${patientName} at ${timeSlot}` : null;
+  const offer = result?.ok ? result.waitlistOffer : null;
+
+  if (!offer) return appointmentDescription ?? undefined;
+
+  if (offer.started) {
+    return [appointmentDescription, "Outbound waitlist call requested."]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  return [appointmentDescription, `No outbound call: ${offer.reason}.`]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function generateTimeSlots(settings: AppointmentSettings) {

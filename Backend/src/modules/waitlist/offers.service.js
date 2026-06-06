@@ -4,7 +4,7 @@ import { db } from "../../db/index.js";
 import { communicationLogs, waitingListEntries, waitlistOffers } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
 import { getCustomer } from "../customers/customers.service.js";
-import { triggerOutboundCall } from "../fonio/fonio.client.js";
+import { assertOutboundCallConfig, triggerOutboundCall } from "../fonio/fonio.client.js";
 import { getSlot } from "../slots/slots.service.js";
 
 const ACTIVE_STATUSES  = ["pending", "calling", "call_no_answer", "whatsapp_sent"];
@@ -175,6 +175,8 @@ export async function startOfferCycle(clientId, slotId, { userId = null, respons
   const entry = await getNextEntry(clientId, slotId);
   if (!entry) throw Object.assign(new Error("Waitlist is empty or all entries have been tried"), { status: 404 });
 
+  assertOutboundCallConfig();
+
   const responseDeadlineAt = new Date(Date.now() + responseDeadlineMinutes * 60 * 1000);
 
   const [offer] = await db
@@ -267,10 +269,15 @@ export function listOffers(clientId) {
 
 export async function autoStartOfferCycle(clientId, slotId, options = {}) {
   try {
-    return await startOfferCycle(clientId, slotId, options);
+    const offer = await startOfferCycle(clientId, slotId, options);
+    return { started: true, offer };
   } catch (error) {
     if (error?.status === 404 || error?.status === 409) {
-      return null;
+      return {
+        started: false,
+        status: "skipped",
+        reason: error?.message ?? "No eligible waitlist offer"
+      };
     }
 
     console.error("[waitlist] automatic offer cycle failed", {
@@ -278,6 +285,10 @@ export async function autoStartOfferCycle(clientId, slotId, options = {}) {
       slotId,
       error: error?.message ?? error
     });
-    return null;
+    return {
+      started: false,
+      status: "failed",
+      reason: error?.message ?? "Automatic offer cycle failed"
+    };
   }
 }

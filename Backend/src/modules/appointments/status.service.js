@@ -64,8 +64,13 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
     return updated;
   });
 
+  let waitlistOffer = null;
   if (toStatus === "cancelled" && updated?.slotId) {
-    await autoStartOfferCycle(clientId, updated.slotId, { userId });
+    waitlistOffer = await autoStartOfferCycle(clientId, updated.slotId, { userId });
+  }
+
+  if (waitlistOffer) {
+    return { ...updated, waitlistOffer };
   }
 
   return updated;

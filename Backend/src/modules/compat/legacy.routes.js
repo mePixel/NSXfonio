@@ -1037,7 +1037,10 @@ legacyRouter.patch("/appointments/:id/cancel", requireAuth, requireClient, async
 
     const mappedAppointment = await readLegacyAppointment(req.user.clientId, req.params.id);
 
-    res.json({ appointments: [mappedAppointment] });
+    res.json({
+      appointments: [mappedAppointment],
+      waitlistOffer: appointment.waitlistOffer ?? null
+    });
   } catch (error) {
     next(error);
   }

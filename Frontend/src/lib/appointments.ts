@@ -19,6 +19,20 @@ export type Appointment = {
   client: Client;
 };
 
+export type WaitlistOfferResult =
+  | {
+      started: true;
+      offer: {
+        id: string;
+        status: string;
+      };
+    }
+  | {
+      started: false;
+      status: "skipped" | "failed";
+      reason: string;
+    };
+
 export type AppointmentSettings = {
   id: string;
   timeSlotSize: number;
@@ -232,8 +246,10 @@ export async function cancelAppointment(formData: FormData) {
     ok: true as const,
     intent: "cancelAppointment" as const,
     message: "Appointment cancelled.",
-    appointments: ((await response.json()) as { appointments: Appointment[] })
-      .appointments,
+    ...((await response.json()) as {
+      appointments: Appointment[];
+      waitlistOffer?: WaitlistOfferResult | null;
+    }),
   };
 }
 
