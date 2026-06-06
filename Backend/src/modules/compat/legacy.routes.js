@@ -5,6 +5,7 @@ import { db, pool } from "../../db/index.js";
 import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
 import { createWaitlistEntryForCustomer } from "../waitlist/waitlist.service.js";
+import { listWaitlistEntriesByCustomerIds } from "../waitlist/waitlist.service.js";
 
 const DEFAULT_APPOINTMENT_SETTINGS_ID = "default";
 const DEFAULT_TIME_SLOT_SIZE = 30;
@@ -52,7 +53,7 @@ function validateClientPayload(body, prefix = "") {
   };
 }
 
-function mapCustomerToLegacyClient(row) {
+function mapCustomerToLegacyClient(row, waitlistEntry = null) {
   return {
     id: row.id,
     firstName: row.firstName,
@@ -60,6 +61,12 @@ function mapCustomerToLegacyClient(row) {
     telephoneNumber: row.phone ?? row.whatsappPhone ?? "",
     email: row.email ?? "",
     description: row.notes ?? "",
+    waitlist: {
+      isOnWaitlist: Boolean(waitlistEntry),
+      entryId: waitlistEntry?.id ?? null,
+      position: waitlistEntry?.position ?? null,
+      notes: waitlistEntry?.notes ?? null
+    },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
@@ -603,7 +610,15 @@ legacyRouter.get("/clients", requireAuth, requireClient, async (req, res, next) 
       .where(eq(customers.clientId, req.user.clientId))
       .orderBy(asc(customers.createdAt));
 
-    res.json({ clients: rows.map(mapCustomerToLegacyClient) });
+    const waitlistEntries = await listWaitlistEntriesByCustomerIds(
+      req.user.clientId,
+      rows.map((row) => row.id)
+    );
+    const waitlistByCustomerId = new Map(waitlistEntries.map((entry) => [entry.customerId, entry]));
+
+    res.json({
+      clients: rows.map((row) => mapCustomerToLegacyClient(row, waitlistByCustomerId.get(row.id) ?? null))
+    });
   } catch (error) {
     next(error);
   }
