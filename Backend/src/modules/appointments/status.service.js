@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { appointments, slots } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
+import { autoStartOfferCycle } from "../waitlist/offers.service.js";
 import { getAppointment } from "./appointments.service.js";
 
 // Enforces the allowed transition matrix from SYSTEMS.md.
@@ -27,7 +28,7 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
     );
   }
 
-  return db.transaction(async (tx) => {
+  const updated = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(appointments)
       .set({ status: toStatus, updatedAt: new Date() })
@@ -58,4 +59,10 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
 
     return updated;
   });
+
+  if (toStatus === "cancelled" && existing.slotId) {
+    await autoStartOfferCycle(clientId, existing.slotId, { userId });
+  }
+
+  return updated;
 }

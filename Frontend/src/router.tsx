@@ -1,6 +1,7 @@
 import { createBrowserRouter, redirect } from "react-router"
 
 import App from "@/App"
+import { RouteErrorPage } from "@/components/route-error"
 import { AppointmentsPage } from "@/routes/appointments"
 import {
   appointmentSettingsAction,
@@ -71,6 +72,7 @@ export const router = createBrowserRouter([
     loader: loginLoader,
     hydrateFallbackElement: <LoadingPage />,
     element: <LoginPage />,
+    errorElement: <RouteErrorPage />,
   },
   {
     path: "/onboarding",
@@ -84,6 +86,7 @@ export const router = createBrowserRouter([
     loader: protectedLoader,
     hydrateFallbackElement: <LoadingPage />,
     element: <App />,
+    errorElement: <RouteErrorPage />,
     children: [
       {
         index: true,
@@ -112,6 +115,7 @@ export const router = createBrowserRouter([
         loader: settingsLoader,
         action: settingsAction,
         element: <SettingsPage />,
+        errorElement: <RouteErrorPage />,
       },
       {
         path: "*",
