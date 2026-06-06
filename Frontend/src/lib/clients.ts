@@ -76,6 +76,48 @@ export async function loadClients() {
   return (await response.json()) as ClientsResponse;
 }
 
+export type Appointment = {
+  id: string;
+  clientId: string;
+  customerId: string;
+  slotId: string | null;
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  confirmationDeadlineAt: string | null;
+  followupDeadlineAt: string | null;
+  cancelReason: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AppointmentsResponse = {
+  appointments: Appointment[];
+};
+
+export async function loadClientAppointments(clientId: string) {
+  const response = await fetch(
+    `${apiURL}/api/customers/${clientId}/appointments`,
+    {
+      credentials: "include",
+    }
+  );
+
+  if (response.status === 401) {
+    throw redirect("/login?redirectTo=%2Fclients");
+  }
+
+  if (!response.ok) {
+    throw new Response("Unable to load appointments.", {
+      status: response.status,
+    });
+  }
+
+  return (await response.json()) as AppointmentsResponse;
+}
+
 export async function createClient(formData: FormData) {
   const values = toClientFormValues(formData);
   const response = await fetch(`${apiURL}/api/clients`, {

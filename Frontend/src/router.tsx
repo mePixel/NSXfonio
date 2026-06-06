@@ -1,6 +1,13 @@
 import { createBrowserRouter, redirect } from "react-router"
 
 import App from "@/App"
+import { AppointmentsPage } from "@/routes/appointments"
+import {
+  appointmentSettingsAction,
+  appointmentSettingsLoader,
+  appointmentsAction,
+  appointmentsLoader,
+} from "@/routes/appointments-data"
 import { ClientsPage } from "@/routes/clients"
 import { clientsAction, clientsLoader } from "@/routes/clients-data"
 import { getCurrentSession } from "@/lib/auth"
@@ -50,6 +57,18 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
+        element: <DashboardPage />,
+      },
+      {
+        path: "appointments",
+        loader: appointmentsLoader,
+        action: appointmentsAction,
+        element: <AppointmentsPage />,
+      },
+      {
+        path: "appointment-settings",
+        loader: appointmentSettingsLoader,
+        action: appointmentSettingsAction,
         element: <DashboardPage />,
       },
       {

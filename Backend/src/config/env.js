@@ -30,6 +30,16 @@ const configuredClientOrigins = (process.env.CLIENT_ORIGIN || "")
 
 const clientOrigins = [...new Set([...defaultClientOrigins, ...configuredClientOrigins])];
 
+function parseJsonObject(value, fallback = {}) {
+  if (!value) return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: Number(process.env.PORT || 3005),
@@ -43,10 +53,7 @@ export const env = {
   fonioApiKey: process.env.API_FONIO,
   fonioFromNumber: process.env.FONIO_FROM_NUMBER,
   fonioAgentId: process.env.FONIO_AGENT_ID,
-  smtpHost: process.env.SMTP_HOST,
-  smtpPort: process.env.SMTP_PORT || "587",
-  smtpSecure: process.env.SMTP_SECURE || "false",
-  smtpUser: process.env.SMTP_USER,
-  smtpPassword: process.env.SMTP_PASSWORD,
-  smtpFromEmail: process.env.SMTP_FROM_EMAIL || "noreply@nsxfonio.com"
+  fonioSharedSecret: process.env.FONIO_SHARED_SECRET,
+  fonioDefaultClientId: process.env.FONIO_DEFAULT_CLIENT_ID || null,
+  fonioToNumberClientMap: parseJsonObject(process.env.FONIO_TO_NUMBER_CLIENT_MAP)
 };

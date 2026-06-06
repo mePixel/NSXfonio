@@ -1,4 +1,4 @@
-CREATE TABLE "clients" (
+CREATE TABLE IF NOT EXISTS "clients" (
 	"id" text PRIMARY KEY NOT NULL,
 	"first_name" text NOT NULL,
 	"last_name" text NOT NULL,
@@ -9,4 +9,4 @@ CREATE TABLE "clients" (
 	"updated_at" timestamp NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX "clients_created_at_idx" ON "clients" USING btree ("created_at");
+CREATE INDEX IF NOT EXISTS "clients_created_at_idx" ON "clients" USING btree ("created_at");

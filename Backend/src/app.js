@@ -6,12 +6,14 @@ import { toNodeHandler } from "better-auth/node";
 import { auth } from "./auth.js";
 import { env } from "./config/env.js";
 import { requireAuth } from "./lib/middleware.js";
+import { legacyRouter } from "./modules/compat/legacy.routes.js";
 import { customersRouter } from "./modules/customers/customers.routes.js";
 import { appointmentsRouter } from "./modules/appointments/appointments.routes.js";
 import { auditRouter } from "./modules/audit/audit.routes.js";
 import { waitlistRouter } from "./modules/waitlist/waitlist.routes.js";
 import { slotsRouter } from "./modules/slots/slots.routes.js";
 import { webhooksRouter } from "./modules/webhooks/webhooks.routes.js";
+import { fonioRouter } from "./modules/fonio/fonio.routes.js";
 
 export const app = express();
 
@@ -52,12 +54,14 @@ app.get("/api/me", requireAuth, (req, res) => {
   res.json({ user: req.user, session: req.session });
 });
 
+app.use("/api", legacyRouter);
 app.use("/api/customers", customersRouter);
 app.use("/api/appointments", appointmentsRouter);
 app.use("/api/audit-logs", auditRouter);
 app.use("/api/waiting-list", waitlistRouter);
 app.use("/api/slots", slotsRouter);
 app.use("/api/webhooks", webhooksRouter);
+app.use("/api/fonio", fonioRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });

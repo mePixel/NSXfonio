@@ -15,6 +15,14 @@ export async function getCustomer(clientId, id) {
   return row ?? null;
 }
 
+export async function findCustomerByPhone(clientId, phone) {
+  const [row] = await db
+    .select()
+    .from(customers)
+    .where(and(eq(customers.clientId, clientId), eq(customers.phone, phone)));
+  return row ?? null;
+}
+
 export async function createCustomer(clientId, data) {
   const [row] = await db
     .insert(customers)
