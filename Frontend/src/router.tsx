@@ -7,6 +7,8 @@ import { getCurrentSession } from "@/lib/auth"
 import { DashboardPage } from "@/routes/dashboard"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
+import { SettingsPage } from "@/routes/settings"
+import { settingsAction, settingsLoader } from "@/routes/settings-data"
 
 function getRedirectTarget(request: Request) {
   const url = new URL(request.url)
@@ -57,6 +59,12 @@ export const router = createBrowserRouter([
         loader: clientsLoader,
         action: clientsAction,
         element: <ClientsPage />,
+      },
+      {
+        path: "settings",
+        loader: settingsLoader,
+        action: settingsAction,
+        element: <SettingsPage />,
       },
       {
         path: "*",

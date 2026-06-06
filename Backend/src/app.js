@@ -9,6 +9,7 @@ import { requireAuth } from "./lib/middleware.js";
 import { customersRouter } from "./modules/customers/customers.routes.js";
 import { appointmentsRouter } from "./modules/appointments/appointments.routes.js";
 import { auditRouter } from "./modules/audit/audit.routes.js";
+import { settingsRouter } from "./modules/settings/settings.routes.js";
 import { waitlistRouter } from "./modules/waitlist/waitlist.routes.js";
 import { slotsRouter } from "./modules/slots/slots.routes.js";
 import { webhooksRouter } from "./modules/webhooks/webhooks.routes.js";
@@ -56,6 +57,7 @@ app.get("/api/me", requireAuth, (req, res) => {
 app.use("/api/customers", customersRouter);
 app.use("/api/appointments", appointmentsRouter);
 app.use("/api/audit-logs", auditRouter);
+app.use("/api/settings", settingsRouter);
 app.use("/api/waiting-list", waitlistRouter);
 app.use("/api/slots", slotsRouter);
 app.use("/api/webhooks", webhooksRouter);

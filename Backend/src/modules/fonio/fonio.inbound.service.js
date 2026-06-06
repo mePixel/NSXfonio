@@ -3,6 +3,8 @@ import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { env } from "../../config/env.js";
 import { db } from "../../db/index.js";
 import { clients, communicationLogs, slots } from "../../db/schema.js";
+import { listUpcomingAppointmentsForCustomer } from "../appointments/appointments.service.js";
+import { transitionStatus } from "../appointments/status.service.js";
 import { createAppointment } from "../appointments/appointments.service.js";
 import { createCustomer, findCustomerByPhone } from "../customers/customers.service.js";
 
@@ -35,6 +37,10 @@ function getBookingPayload(payload) {
   return payload?.booking ?? payload?.appointment ?? payload?.intent?.booking ?? null;
 }
 
+function getCancellationPayload(payload) {
+  return payload?.cancellation ?? payload?.cancel ?? payload?.appointment ?? null;
+}
+
 function getCustomerPayload(payload) {
   return payload?.customer ?? payload?.caller ?? payload?.contact ?? null;
 }
@@ -53,7 +59,8 @@ function getRequestedPhone(payload) {
 }
 
 function getResolvedClientIdFromPayload(payload) {
-  return payload?.context?.clientId
+  return payload?.authenticatedClientId
+    ?? payload?.context?.clientId
     ?? payload?.clientId
     ?? payload?.booking?.clientId
     ?? payload?.defaultValues?.clientId
@@ -302,6 +309,9 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
   const customer = callerPhone
     ? await findCustomerByPhone(clientId, callerPhone)
     : null;
+  const upcomingAppointments = customer
+    ? await listUpcomingAppointmentsForCustomer(clientId, customer.id, { now })
+    : [];
 
   const availableSlots = await listFonioAvailableSlots(clientId, {
     from: now,
@@ -330,6 +340,13 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
           isExistingCustomer: false,
           notes: null
         },
+    upcomingAppointments: upcomingAppointments.map((appointment) => ({
+      id: appointment.id,
+      title: appointment.title,
+      startsAt: appointment.startsAt,
+      endsAt: appointment.endsAt,
+      status: appointment.status
+    })),
     availableSlots,
     bookingRules: {
       timezone: "Europe/Vienna",
@@ -338,6 +355,70 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
     promptHints: {
       bookingAvailable: availableSlots.length > 0,
       reason: availableSlots.length > 0 ? null : "no_available_slots"
+    }
+  };
+}
+
+export async function listFonioUpcomingAppointments(payload, { now = new Date(), limit = 5 } = {}) {
+  const client = await resolveClient(payload);
+  const clientId = client?.id ?? null;
+  const callerPhone = getRequestedPhone(payload);
+  const calledNumber = getCalledNumber(payload);
+
+  if (!clientId) {
+    return {
+      handled: false,
+      reason: "unresolved_client",
+      callerPhone,
+      calledNumber,
+      appointments: []
+    };
+  }
+
+  const customer = callerPhone
+    ? await findCustomerByPhone(clientId, callerPhone)
+    : null;
+
+  if (!customer) {
+    return {
+      handled: true,
+      clientId,
+      practiceName: client.name,
+      callerPhone,
+      calledNumber,
+      customer: null,
+      appointments: [],
+      promptHints: {
+        hasUpcomingAppointments: false,
+        reason: "customer_not_found"
+      }
+    };
+  }
+
+  const appointments = await listUpcomingAppointmentsForCustomer(clientId, customer.id, { now });
+
+  return {
+    handled: true,
+    clientId,
+    practiceName: client.name,
+    callerPhone,
+    calledNumber,
+    customer: {
+      id: customer.id,
+      name: `${customer.firstName} ${customer.lastName}`.trim(),
+      firstName: customer.firstName,
+      lastName: customer.lastName
+    },
+    appointments: appointments.slice(0, limit).map((appointment) => ({
+      id: appointment.id,
+      title: appointment.title,
+      startsAt: appointment.startsAt,
+      endsAt: appointment.endsAt,
+      status: appointment.status
+    })),
+    promptHints: {
+      hasUpcomingAppointments: appointments.length > 0,
+      reason: appointments.length > 0 ? null : "no_upcoming_appointments"
     }
   };
 }
@@ -390,5 +471,57 @@ export async function handleInboundAppointmentWebhook(payload) {
     appointmentId: appointment.id,
     customerId: customer.id,
     slotId: slot.id
+  };
+}
+
+export async function handleInboundCancellation(payload) {
+  const client = await resolveClient(payload);
+  const clientId = client?.id ?? null;
+  if (!clientId) {
+    return { handled: false, reason: "unresolved_client" };
+  }
+
+  const cancellation = getCancellationPayload(payload);
+  const appointmentId = cancellation?.appointmentId ?? cancellation?.id ?? null;
+  if (!appointmentId) {
+    return { handled: false, reason: "missing_appointment_id" };
+  }
+
+  const customer = getRequestedPhone(payload)
+    ? await findCustomerByPhone(clientId, getRequestedPhone(payload))
+    : null;
+  const upcomingAppointments = customer
+    ? await listUpcomingAppointmentsForCustomer(clientId, customer.id)
+    : [];
+
+  const matchedAppointment = upcomingAppointments.find((appointment) => appointment.id === appointmentId);
+  if (!matchedAppointment) {
+    return { handled: false, reason: "appointment_not_found_for_caller" };
+  }
+
+  const cancelled = await transitionStatus(clientId, appointmentId, "cancelled", {
+    reason: cancellation?.reason ?? payload?.reason ?? "Cancelled by caller via Fonio inbound call"
+  });
+
+  await db.insert(communicationLogs).values({
+    id: randomUUID(),
+    clientId,
+    appointmentId: cancelled.id,
+    customerId: customer?.id ?? null,
+    channel: "call",
+    direction: "inbound",
+    eventType: "appointment_cancelled_from_inbound_call",
+    status: payload?.status ?? "processed",
+    externalCallId: payload?.callId ?? payload?.id ?? null,
+    payloadJson: JSON.stringify(payload)
+  });
+
+  return {
+    handled: true,
+    mode: "inbound_cancellation",
+    clientId,
+    appointmentId: cancelled.id,
+    status: cancelled.status,
+    releasedSlotId: matchedAppointment.slotId ?? null
   };
 }

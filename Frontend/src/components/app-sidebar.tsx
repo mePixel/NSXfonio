@@ -6,6 +6,7 @@ import {
   Bell,
   ChevronsUpDown,
   CreditCard,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Sparkles,
@@ -47,6 +48,11 @@ const navItems = [
     title: "Clients",
     url: "/clients",
     icon: UsersRound,
+  },
+  {
+    title: "Settings",
+    url: "/settings",
+    icon: KeyRound,
   },
 ];
 
