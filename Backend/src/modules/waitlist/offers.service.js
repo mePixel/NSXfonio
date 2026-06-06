@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, asc, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { communicationLogs, waitingListEntries, waitlistOffers } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
@@ -7,7 +7,7 @@ import { getCustomer } from "../customers/customers.service.js";
 import { assertOutboundCallConfig, triggerOutboundCall } from "../fonio/fonio.client.js";
 import { getSlot } from "../slots/slots.service.js";
 
-const ACTIVE_STATUSES  = ["pending", "calling", "call_no_answer", "whatsapp_sent"];
+const ACTIVE_STATUSES  = ["pending", "calling", "whatsapp_sent"];
 const DEFAULT_DEADLINE_MINUTES = 60;
 const CANCELLED_SLOT_OPENING_PROMPT =
   "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept.";
@@ -102,6 +102,18 @@ export async function moveWaitlistEntryToEnd(clientId, waitingListEntryId) {
   });
 }
 
+async function expireStaleActiveOffers(clientId, slotId) {
+  await db
+    .update(waitlistOffers)
+    .set({ status: "timed_out", updatedAt: new Date() })
+    .where(and(
+      eq(waitlistOffers.clientId, clientId),
+      eq(waitlistOffers.slotId, slotId),
+      inArray(waitlistOffers.status, ACTIVE_STATUSES),
+      lt(waitlistOffers.responseDeadlineAt, new Date())
+    ));
+}
+
 function buildCancelledSlotCallContext(slot, customer, offer) {
   return {
     name: `${customer.firstName} ${customer.lastName}`,
@@ -160,6 +172,8 @@ export async function startOfferCycle(clientId, slotId, { userId = null, respons
   const slot = await getSlot(clientId, slotId);
   if (!slot)                    throw Object.assign(new Error("Slot not found"), { status: 404 });
   if (slot.status !== "available") throw Object.assign(new Error("Slot is not available"), { status: 409 });
+
+  await expireStaleActiveOffers(clientId, slotId);
 
   // Block if an active offer already exists for this slot
   const [activeOffer] = await db
