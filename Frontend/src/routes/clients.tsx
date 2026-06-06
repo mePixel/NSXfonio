@@ -5,21 +5,13 @@ import {
   Phone,
   Plus,
   RefreshCw,
+  Trash2,
   UsersRound,
 } from "lucide-react";
-import {
-  useFetcher,
-  useLoaderData,
-  useRevalidator,
-} from "react-router";
+import { useFetcher, useLoaderData, useRevalidator } from "react-router";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +27,7 @@ import {
 } from "@/components/ui/popover";
 import {
   createClient,
+  deleteClient,
   loadClientAppointments,
   loadClients,
   type Appointment,
@@ -45,6 +38,7 @@ import { toast } from "sonner";
 
 type ClientsLoaderData = Awaited<ReturnType<typeof loadClients>>;
 type CreateClientResult = Awaited<ReturnType<typeof createClient>>;
+type DeleteClientResult = Awaited<ReturnType<typeof deleteClient>>;
 
 export function ClientsPage() {
   const { clients } = useLoaderData() as ClientsLoaderData;
@@ -53,7 +47,7 @@ export function ClientsPage() {
   const formRef = React.useRef<HTMLFormElement>(null);
   const [open, setOpen] = React.useState(false);
   const [selectedClient, setSelectedClient] = React.useState<Client | null>(
-    null
+    null,
   );
   const isSubmitting = fetcher.state !== "idle";
   const isRefreshing = revalidator.state === "loading";
@@ -64,7 +58,11 @@ export function ClientsPage() {
   const prevResultRef = React.useRef<typeof fetcher.data>(null);
 
   React.useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.ok && fetcher.data !== prevResultRef.current) {
+    if (
+      fetcher.state === "idle" &&
+      fetcher.data?.ok &&
+      fetcher.data !== prevResultRef.current
+    ) {
       prevResultRef.current = fetcher.data;
       const createdClient = fetcher.data.clients[0];
       const clientName = createdClient
@@ -294,6 +292,9 @@ function ClientsTable({
             <th className="px-4 py-3 font-medium">Email</th>
             <th className="px-4 py-3 font-medium">Description</th>
             <th className="px-4 py-3 font-medium">Created</th>
+            <th className="w-12 px-4 py-3 font-medium">
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -340,11 +341,83 @@ function ClientsTable({
               <td className="px-4 py-3 text-xs text-muted-foreground">
                 {formatDate(client.createdAt)}
               </td>
+              <td className="px-4 py-3">
+                <DeleteClientButton client={client} />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function DeleteClientButton({ client }: { client: Client }) {
+  const fetcher = useFetcher<DeleteClientResult>();
+  const isDeleting = fetcher.state !== "idle";
+  const prevResultRef = React.useRef<typeof fetcher.data>(null);
+
+  React.useEffect(() => {
+    if (
+      fetcher.state !== "idle" ||
+      !fetcher.data ||
+      fetcher.data === prevResultRef.current
+    ) {
+      return;
+    }
+
+    prevResultRef.current = fetcher.data;
+
+    if (fetcher.data.ok) {
+      const deletedAppointmentCount = fetcher.data.deletedAppointmentCount;
+      toast.success("Client deleted", {
+        description:
+          deletedAppointmentCount > 0
+            ? `${deletedAppointmentCount} appointment${
+                deletedAppointmentCount === 1 ? "" : "s"
+              } deleted.`
+            : undefined,
+      });
+      return;
+    }
+
+    toast.error("Could not delete client", {
+      description: fetcher.data.message,
+    });
+  }, [fetcher.data, fetcher.state]);
+
+  return (
+    <fetcher.Form
+      method="delete"
+      action="/clients"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <input type="hidden" name="clientId" value={client.id} />
+      <Button
+        type="submit"
+        variant="destructive"
+        size="icon-sm"
+        aria-label={`Delete ${client.firstName} ${client.lastName}`}
+        disabled={isDeleting}
+        onClick={(event) => {
+          event.stopPropagation();
+
+          if (
+            !window.confirm(
+              `Delete ${client.firstName} ${client.lastName} and all appointments for this client?`,
+            )
+          ) {
+            event.preventDefault();
+          }
+        }}
+      >
+        {isDeleting ? (
+          <RefreshCw className="size-3 animate-spin" />
+        ) : (
+          <Trash2 className="size-3" />
+        )}
+      </Button>
+    </fetcher.Form>
   );
 }
 
@@ -403,16 +476,25 @@ function statusLabel(status: string) {
 
 function statusColor(status: string) {
   const map: Record<string, string> = {
-    scheduled: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-    confirmation_pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
-    confirmed: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-    followup_sent: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
-    cancel_pending: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+    scheduled:
+      "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+    confirmation_pending:
+      "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
+    confirmed:
+      "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
+    followup_sent:
+      "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
+    cancel_pending:
+      "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
     cancelled: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
-    completed: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
+    completed:
+      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
     no_show: "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400",
   };
-  return map[status] ?? "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400";
+  return (
+    map[status] ??
+    "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400"
+  );
 }
 
 function ClientAppointmentsDialog({
@@ -446,7 +528,9 @@ function ClientAppointmentsDialog({
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load appointments.");
+          setError(
+            err instanceof Error ? err.message : "Failed to load appointments.",
+          );
         }
       })
       .finally(() => {
@@ -466,7 +550,8 @@ function ClientAppointmentsDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Calendar className="size-4 text-muted-foreground" />
-            {client ? `${client.firstName} ${client.lastName}` : "Client"} — Appointments
+            {client ? `${client.firstName} ${client.lastName}` : "Client"} —
+            Appointments
           </DialogTitle>
           <DialogDescription>
             Past and upcoming appointments for this client.
@@ -501,10 +586,7 @@ function ClientAppointmentsDialog({
               </thead>
               <tbody>
                 {appointments.map((appointment) => (
-                  <tr
-                    key={appointment.id}
-                    className="border-b last:border-b-0"
-                  >
+                  <tr key={appointment.id} className="border-b last:border-b-0">
                     <td className="px-3 py-2 text-muted-foreground">
                       {formatDateOnly(appointment.startsAt)}
                     </td>
@@ -515,7 +597,7 @@ function ClientAppointmentsDialog({
                       <span
                         className={cn(
                           "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                          statusColor(appointment.status)
+                          statusColor(appointment.status),
                         )}
                       >
                         {statusLabel(appointment.status)}

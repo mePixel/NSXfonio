@@ -1,6 +1,7 @@
 import * as React from "react";
-import { KeyRound, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { KeyRound, Moon, RefreshCw, ShieldCheck, Sun, Trash2 } from "lucide-react";
 import { useFetcher, useLoaderData } from "react-router";
+import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ type SettingsActionData =
 export function SettingsPage() {
   const { apiKey } = useLoaderData() as SettingsLoaderData;
   const fetcher = useFetcher<SettingsActionData>();
+  const { resolvedTheme, setTheme } = useTheme();
   const [name, setName] = React.useState(apiKey?.name ?? "Fonio");
   const latestCreatedKey = fetcher.data && fetcher.data.ok && "apiKey" in fetcher.data
     ? fetcher.data.apiKey
@@ -34,6 +36,39 @@ export function SettingsPage() {
           on every Fonio backend call.
         </p>
       </section>
+
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle>Appearance</CardTitle>
+          <CardDescription>
+            Choose the color mode used across the dashboard.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="inline-flex rounded-md border bg-muted p-1">
+            <Button
+              type="button"
+              variant={resolvedTheme === "light" ? "default" : "ghost"}
+              size="sm"
+              aria-pressed={resolvedTheme === "light"}
+              onClick={() => setTheme("light")}
+            >
+              <Sun className="size-4" />
+              Light
+            </Button>
+            <Button
+              type="button"
+              variant={resolvedTheme === "dark" ? "default" : "ghost"}
+              size="sm"
+              aria-pressed={resolvedTheme === "dark"}
+              onClick={() => setTheme("dark")}
+            >
+              <Moon className="size-4" />
+              Dark
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card className="shadow-sm">
         <CardHeader>
