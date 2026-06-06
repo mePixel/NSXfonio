@@ -18,6 +18,19 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function timeOfDayMatches(date, timeOfDay) {
+  if (!timeOfDay) return true;
+
+  const hour = date.getUTCHours();
+  const normalized = String(timeOfDay).toLowerCase();
+
+  if (normalized === "morning") return hour >= 6 && hour < 12;
+  if (normalized === "afternoon") return hour >= 12 && hour < 17;
+  if (normalized === "evening") return hour >= 17 && hour < 21;
+
+  return true;
+}
+
 function getBookingPayload(payload) {
   return payload?.booking ?? payload?.appointment ?? payload?.intent?.booking ?? null;
 }
@@ -115,6 +128,10 @@ async function resolveClient(payload) {
   return null;
 }
 
+export async function resolveFonioClient(payload) {
+  return resolveClient(payload);
+}
+
 async function findAvailableSlot(clientId, booking) {
   const directSlotId = booking?.slotId ?? booking?.slot?.id ?? null;
   if (directSlotId) {
@@ -193,6 +210,68 @@ export async function listFonioAvailableSlots(clientId, { from, to, limit } = {}
   }
 
   return query;
+}
+
+export async function searchFonioAvailableSlots(payload, { now = new Date(), defaultWindowDays = 14, maxSlots = 6 } = {}) {
+  const client = await resolveClient(payload);
+  const clientId = client?.id ?? null;
+  const callerPhone = getRequestedPhone(payload);
+  const calledNumber = getCalledNumber(payload);
+  const search = payload?.search ?? {};
+
+  if (!clientId) {
+    return {
+      handled: false,
+      reason: "unresolved_client",
+      callerPhone,
+      calledNumber,
+      matches: []
+    };
+  }
+
+  const from = parseDate(search?.from) ?? now;
+  const to = parseDate(search?.to) ?? new Date(from.getTime() + defaultWindowDays * 24 * 60 * 60 * 1000);
+  const timeOfDay = typeof search?.timeOfDay === "string" ? search.timeOfDay : null;
+
+  if (to <= from) {
+    return {
+      handled: false,
+      reason: "invalid_range",
+      clientId,
+      practiceName: client.name,
+      callerPhone,
+      calledNumber,
+      matches: []
+    };
+  }
+
+  const rawMatches = await listFonioAvailableSlots(clientId, {
+    from,
+    to,
+    limit: maxSlots * 3
+  });
+
+  const matches = rawMatches
+    .filter((slot) => timeOfDayMatches(slot.startsAt, timeOfDay))
+    .slice(0, maxSlots);
+
+  return {
+    handled: true,
+    clientId,
+    practiceName: client.name,
+    callerPhone,
+    calledNumber,
+    requestedRange: {
+      from,
+      to,
+      timeOfDay
+    },
+    matches,
+    promptHints: {
+      bookingAvailable: matches.length > 0,
+      reason: matches.length > 0 ? null : "no_matching_slots"
+    }
+  };
 }
 
 export async function buildInboundContext(payload, { now = new Date(), maxSlots = 3 } = {}) {
