@@ -36,6 +36,13 @@
       "when": 1780748463000,
       "tag": "0004_migrate_to_modular_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780748464000,
+      "tag": "0005_create_fonio_api_keys",
+      "breakpoints": true
     }
   ]
 }

@@ -15,7 +15,6 @@ import { getCurrentSession } from "@/lib/auth"
 import { DashboardPage } from "@/routes/dashboard"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
-import { SettingsPage } from "@/routes/settings"
 import { settingsAction, settingsLoader } from "@/routes/settings-data"
 import { OnboardingPage } from "@/routes/onboarding"
 
@@ -114,8 +113,7 @@ export const router = createBrowserRouter([
         path: "settings",
         loader: settingsLoader,
         action: settingsAction,
-        element: <SettingsPage />,
-        errorElement: <RouteErrorPage />,
+        element: <DashboardPage />,
       },
       {
         path: "*",
