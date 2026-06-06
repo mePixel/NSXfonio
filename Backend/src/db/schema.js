@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { boolean, index, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -83,6 +83,38 @@ export const clients = pgTable(
   (table) => [index("clients_created_at_idx").on(table.createdAt)]
 );
 
+export const appointments = pgTable(
+  "appointments",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "restrict" }),
+    appointmentDate: text("appointment_date").notNull(),
+    timeSlot: text("time_slot").notNull(),
+    status: text("status").notNull().default("scheduled"),
+    moreInfo: text("more_info").notNull().default(""),
+    cancellationReason: text("cancellation_reason"),
+    createdAt: timestamp("created_at").notNull(),
+    updatedAt: timestamp("updated_at").notNull(),
+    cancelledAt: timestamp("cancelled_at")
+  },
+  (table) => [
+    index("appointments_date_time_idx").on(table.appointmentDate, table.timeSlot),
+    index("appointments_client_id_idx").on(table.clientId)
+  ]
+);
+
+export const appointmentSettings = pgTable("appointment_settings", {
+  id: text("id").primaryKey(),
+  timeSlotSize: integer("time_slot_size").notNull(),
+  workingDays: text("working_days").notNull(),
+  officeHoursStart: text("office_hours_start").notNull().default("08:00"),
+  officeHoursEnd: text("office_hours_end").notNull().default("17:00"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull()
+});
+
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account)
@@ -102,13 +134,28 @@ export const accountRelations = relations(account, ({ one }) => ({
   })
 }));
 
+export const clientRelations = relations(clients, ({ many }) => ({
+  appointments: many(appointments)
+}));
+
+export const appointmentRelations = relations(appointments, ({ one }) => ({
+  client: one(clients, {
+    fields: [appointments.clientId],
+    references: [clients.id]
+  })
+}));
+
 export const schema = {
   user,
   session,
   account,
   verification,
   clients,
+  appointments,
+  appointmentSettings,
   userRelations,
   sessionRelations,
-  accountRelations
+  accountRelations,
+  clientRelations,
+  appointmentRelations
 };
