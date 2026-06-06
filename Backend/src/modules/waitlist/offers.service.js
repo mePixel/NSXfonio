@@ -27,6 +27,21 @@ async function getNextEntry(clientId, slotId) {
     .from(waitlistOffers)
     .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.slotId, slotId)));
 
+  const offerIds = existingOffers.map((offer) => offer.id);
+  const sentCallLogs = offerIds.length
+    ? await db
+      .select({ waitlistOfferId: communicationLogs.waitlistOfferId })
+      .from(communicationLogs)
+      .where(and(
+        eq(communicationLogs.clientId, clientId),
+        eq(communicationLogs.channel, "call"),
+        eq(communicationLogs.direction, "outbound"),
+        eq(communicationLogs.status, "sent"),
+        inArray(communicationLogs.waitlistOfferId, offerIds)
+      ))
+    : [];
+  const sentCallOfferIds = new Set(sentCallLogs.map((log) => log.waitlistOfferId));
+
   const activeOffersOtherSlots = await db
     .select()
     .from(waitlistOffers)
@@ -42,7 +57,10 @@ async function getNextEntry(clientId, slotId) {
     const entryOffers = existingOffers.filter(o => o.waitingListEntryId === entry.id);
     const hasActive   = entryOffers.some(o => ACTIVE_STATUSES.includes(o.status));
     const hasAccepted = entryOffers.some(o => o.status === "accepted");
-    const hasTriedThisSlot = entryOffers.length > 0;
+    const hasTriedThisSlot = entryOffers.some((offer) =>
+      ["call_no_answer", "declined", "accepted"].includes(offer.status)
+      || (offer.status === "timed_out" && sentCallOfferIds.has(offer.id))
+    );
     const hasOtherActiveOffer = activeOffersOtherSlots.some((offer) => {
       const offeredEntry = entryById.get(offer.waitingListEntryId);
       return offeredEntry?.customerId === entry.customerId;
