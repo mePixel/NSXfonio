@@ -106,6 +106,59 @@ Example response:
 
 Fonio can use `{{practiceName}}`, `{{customer.firstName}}`, and the `availableSlots` array directly in the prompt.
 
+For dynamic availability lookup during the call, use:
+
+- `POST /api/fonio/inbound-search-slots`
+
+Example request body:
+
+```json
+{
+  "fromNumber": "+436641234567",
+  "toNumber": "+43123456789",
+  "search": {
+    "from": "2026-06-20T00:00:00.000Z",
+    "to": "2026-06-27T00:00:00.000Z",
+    "timeOfDay": "morning"
+  }
+}
+```
+
+Example response:
+
+```json
+{
+  "handled": true,
+  "clientId": "actual-client-id",
+  "practiceName": "Praxis Mueller",
+  "callerPhone": "+436641234567",
+  "calledNumber": "+43123456789",
+  "requestedRange": {
+    "from": "2026-06-20T00:00:00.000Z",
+    "to": "2026-06-27T00:00:00.000Z",
+    "timeOfDay": "morning"
+  },
+  "matches": [
+    {
+      "id": "slot-1",
+      "startsAt": "2026-06-23T09:00:00.000Z",
+      "endsAt": "2026-06-23T09:30:00.000Z",
+      "status": "available"
+    }
+  ],
+  "promptHints": {
+    "bookingAvailable": true,
+    "reason": null
+  }
+}
+```
+
+Supported `timeOfDay` values:
+
+- `morning`
+- `afternoon`
+- `evening`
+
 For the booking confirmation step during or after the call, use:
 
 - `POST /api/fonio/inbound-booking`
@@ -198,9 +251,11 @@ The safer flow is:
 1. Fonio calls `POST /api/fonio/inbound-context` when the inbound call rings.
 2. Our backend returns known customer info plus the next concrete bookable slots.
 3. Fonio uses that JSON in the live prompt.
-4. When the caller confirms a slot, Fonio calls `POST /api/fonio/inbound-booking`.
-5. We create the customer if needed and book the slot atomically.
-6. Fonio confirms success to the caller only after the booking API succeeds.
+4. If the caller asks for a different time window like “in two weeks” or “next Thursday morning”, Fonio calls `POST /api/fonio/inbound-search-slots`.
+5. Our backend returns matching real slots for that date range.
+6. When the caller confirms one exact slot, Fonio calls `POST /api/fonio/inbound-booking`.
+7. We create the customer if needed and book the slot atomically.
+8. Fonio confirms success to the caller only after the booking API succeeds.
 
 ## Current MVP Limits
 

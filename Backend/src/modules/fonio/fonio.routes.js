@@ -4,6 +4,7 @@ import { isoDate, str } from "../../lib/sanitize.js";
 import {
   buildInboundContext,
   handleInboundAppointmentWebhook,
+  searchFonioAvailableSlots,
   listFonioAvailableSlots
 } from "./fonio.inbound.service.js";
 
@@ -53,6 +54,31 @@ fonioRouter.post("/inbound-booking", async (req, res, next) => {
       unresolved_client: 422,
       no_booking_intent: 422,
       no_matching_available_slot: 409
+    };
+
+    res.status(statusByReason[result.reason] ?? 422).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+fonioRouter.post("/inbound-search-slots", async (req, res, next) => {
+  try {
+    const maxSlotsRaw = Number(req.body?.maxSlots ?? req.query?.maxSlots ?? 6);
+    const maxSlots = Number.isInteger(maxSlotsRaw) && maxSlotsRaw > 0 && maxSlotsRaw <= 12
+      ? maxSlotsRaw
+      : 6;
+
+    const result = await searchFonioAvailableSlots(req.body ?? {}, { maxSlots });
+
+    if (result.handled) {
+      res.json(result);
+      return;
+    }
+
+    const statusByReason = {
+      unresolved_client: 422,
+      invalid_range: 400
     };
 
     res.status(statusByReason[result.reason] ?? 422).json(result);
