@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { Router } from "express";
 import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
-import { appointments, customers, slots } from "../../db/schema.js";
+import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
 
 const DEFAULT_APPOINTMENT_SETTINGS_ID = "default";
@@ -11,6 +11,7 @@ const DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5];
 const DEFAULT_OFFICE_HOURS_START = "08:00";
 const DEFAULT_OFFICE_HOURS_END = "17:00";
 const SUPPORTED_TIME_SLOT_SIZES = new Set([15, 30, 60]);
+const SLOT_GENERATION_DAYS = 30;
 
 export const legacyRouter = Router();
 
@@ -147,6 +148,14 @@ function addMinutes(date, minutes) {
   return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
+function addDays(date, days) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
 function formatDate(date) {
   return [
     date.getFullYear(),
@@ -216,6 +225,182 @@ async function ensureAppointmentSettings() {
   );
 
   return rows[0];
+}
+
+async function ensureClientSchedules(clientId, settings) {
+  const existingSchedules = await db
+    .select()
+    .from(schedules)
+    .where(eq(schedules.clientId, clientId))
+    .orderBy(asc(schedules.createdAt));
+
+  const scheduleIdsByDay = new Map();
+
+  for (const dayOfWeek of settings.workingDays) {
+    const existing = existingSchedules.find((schedule) => schedule.dayOfWeek === dayOfWeek);
+
+    if (existing) {
+      const [updated] = await db
+        .update(schedules)
+        .set({
+          startTime: settings.officeHoursStart,
+          endTime: settings.officeHoursEnd,
+          slotDurationMinutes: settings.timeSlotSize,
+          updatedAt: new Date()
+        })
+        .where(eq(schedules.id, existing.id))
+        .returning();
+      scheduleIdsByDay.set(dayOfWeek, updated.id);
+      continue;
+    }
+
+    const id = randomUUID();
+    await db.insert(schedules).values({
+      id,
+      clientId,
+      dayOfWeek,
+      startTime: settings.officeHoursStart,
+      endTime: settings.officeHoursEnd,
+      slotDurationMinutes: settings.timeSlotSize
+    });
+    scheduleIdsByDay.set(dayOfWeek, id);
+  }
+
+  return scheduleIdsByDay;
+}
+
+async function syncSlotsFromAppointmentSettings(clientId, settings, { now = new Date(), horizonDays = SLOT_GENERATION_DAYS } = {}) {
+  const scheduleIdsByDay = await ensureClientSchedules(clientId, settings);
+  const rangeStart = startOfDay(now);
+  const rangeEnd = addDays(rangeStart, horizonDays);
+
+  const existingSlots = await db
+    .select()
+    .from(slots)
+    .where(and(
+      eq(slots.clientId, clientId),
+      gte(slots.startsAt, rangeStart),
+      lt(slots.startsAt, rangeEnd)
+    ))
+    .orderBy(asc(slots.startsAt));
+
+  const activeAppointments = await db
+    .select({
+      id: appointments.id,
+      slotId: appointments.slotId,
+      startsAt: appointments.startsAt,
+      endsAt: appointments.endsAt
+    })
+    .from(appointments)
+    .where(and(
+      eq(appointments.clientId, clientId),
+      gte(appointments.startsAt, rangeStart),
+      lt(appointments.startsAt, rangeEnd),
+      ne(appointments.status, "cancelled")
+    ))
+    .orderBy(asc(appointments.startsAt));
+
+  const slotsByRange = new Map(
+    existingSlots.map((slot) => [`${slot.startsAt.toISOString()}|${slot.endsAt.toISOString()}`, slot])
+  );
+
+  for (const appointment of activeAppointments) {
+    const key = `${appointment.startsAt.toISOString()}|${appointment.endsAt.toISOString()}`;
+    let slot = slotsByRange.get(key);
+
+    if (!slot) {
+      const id = randomUUID();
+      const scheduleId = scheduleIdsByDay.get(appointment.startsAt.getDay()) ?? null;
+      await db.insert(slots).values({
+        id,
+        clientId,
+        scheduleId,
+        startsAt: appointment.startsAt,
+        endsAt: appointment.endsAt,
+        status: "booked",
+        appointmentId: appointment.id
+      });
+      slot = {
+        id,
+        clientId,
+        scheduleId,
+        startsAt: appointment.startsAt,
+        endsAt: appointment.endsAt,
+        status: "booked",
+        appointmentId: appointment.id
+      };
+      slotsByRange.set(key, slot);
+    } else if (slot.status !== "booked" || slot.appointmentId !== appointment.id) {
+      const [updated] = await db
+        .update(slots)
+        .set({
+          status: "booked",
+          appointmentId: appointment.id,
+          updatedAt: new Date()
+        })
+        .where(eq(slots.id, slot.id))
+        .returning();
+      slot = updated;
+      slotsByRange.set(key, slot);
+    }
+
+    if (appointment.slotId !== slot.id) {
+      await db
+        .update(appointments)
+        .set({
+          slotId: slot.id,
+          updatedAt: new Date()
+        })
+        .where(eq(appointments.id, appointment.id));
+    }
+  }
+
+  const startMinutes = timeSlotToMinutes(settings.officeHoursStart);
+  const endMinutes = timeSlotToMinutes(settings.officeHoursEnd);
+  if (startMinutes === null || endMinutes === null || startMinutes >= endMinutes) {
+    return;
+  }
+
+  for (let dayOffset = 0; dayOffset < horizonDays; dayOffset += 1) {
+    const date = addDays(rangeStart, dayOffset);
+    const dayOfWeek = date.getDay();
+
+    if (!settings.workingDays.includes(dayOfWeek)) {
+      continue;
+    }
+
+    const scheduleId = scheduleIdsByDay.get(dayOfWeek) ?? null;
+
+    for (let minutes = startMinutes; minutes < endMinutes; minutes += settings.timeSlotSize) {
+      const startsAt = new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(minutes / 60), minutes % 60, 0, 0);
+      const endsAt = addMinutes(startsAt, settings.timeSlotSize);
+      const key = `${startsAt.toISOString()}|${endsAt.toISOString()}`;
+
+      if (slotsByRange.has(key)) {
+        continue;
+      }
+
+      const id = randomUUID();
+      await db.insert(slots).values({
+        id,
+        clientId,
+        scheduleId,
+        startsAt,
+        endsAt,
+        status: "available"
+      });
+
+      slotsByRange.set(key, {
+        id,
+        clientId,
+        scheduleId,
+        startsAt,
+        endsAt,
+        status: "available",
+        appointmentId: null
+      });
+    }
+  }
 }
 
 function validateAppointmentSettingsPayload(body) {
@@ -450,9 +635,10 @@ legacyRouter.post("/clients", requireAuth, requireClient, async (req, res, next)
   }
 });
 
-legacyRouter.get("/appointment-settings", requireAuth, requireClient, async (_req, res, next) => {
+legacyRouter.get("/appointment-settings", requireAuth, requireClient, async (req, res, next) => {
   try {
     const settings = await ensureAppointmentSettings();
+    await syncSlotsFromAppointmentSettings(req.user.clientId, normalizeAppointmentSettings(settings));
 
     res.json({ settings: normalizeAppointmentSettings(settings) });
   } catch (error) {
@@ -506,6 +692,8 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
         now
       ]
     );
+
+    await syncSlotsFromAppointmentSettings(req.user.clientId, normalizeAppointmentSettings(rows[0]));
 
     res.json({ settings: normalizeAppointmentSettings(rows[0]) });
   } catch (error) {
@@ -662,8 +850,59 @@ legacyRouter.post("/appointments", requireAuth, requireClient, async (req, res, 
         })
         .returning();
 
+      const [existingSlot] = await tx
+        .select()
+        .from(slots)
+        .where(and(
+          eq(slots.clientId, req.user.clientId),
+          eq(slots.startsAt, startsAt),
+          eq(slots.endsAt, endsAt)
+        ))
+        .limit(1);
+
+      let createdSlot = existingSlot;
+
+      if (createdSlot && createdSlot.status !== "available") {
+        throw Object.assign(new Error("This time slot is not available."), { status: 409 });
+      }
+
+      if (createdSlot) {
+        const [updatedSlot] = await tx
+          .update(slots)
+          .set({
+            status: "booked",
+            appointmentId: createdAppointment.id,
+            updatedAt: new Date()
+          })
+          .where(eq(slots.id, createdSlot.id))
+          .returning();
+        createdSlot = updatedSlot;
+      } else {
+        const [insertedSlot] = await tx
+          .insert(slots)
+          .values({
+            id: randomUUID(),
+            clientId: req.user.clientId,
+            startsAt,
+            endsAt,
+            status: "booked",
+            appointmentId: createdAppointment.id
+          })
+          .returning();
+        createdSlot = insertedSlot;
+      }
+
+      const [linkedAppointment] = await tx
+        .update(appointments)
+        .set({
+          slotId: createdSlot.id,
+          updatedAt: new Date()
+        })
+        .where(eq(appointments.id, createdAppointment.id))
+        .returning();
+
       return {
-        ...createdAppointment,
+        ...(linkedAppointment ?? createdAppointment),
         customerId: customer.id,
         customerFirstName: customer.firstName,
         customerLastName: customer.lastName,
