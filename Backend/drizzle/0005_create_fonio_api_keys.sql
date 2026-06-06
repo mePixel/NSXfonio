@@ -15,7 +15,7 @@ DO $$ BEGIN
   ALTER TABLE "fonio_api_keys"
     ADD CONSTRAINT "fonio_api_keys_key_hash_unique" UNIQUE("key_hash");
 EXCEPTION
-  WHEN duplicate_object THEN null;
+  WHEN duplicate_object OR duplicate_table THEN null;
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
