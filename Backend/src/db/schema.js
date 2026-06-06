@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -341,6 +341,31 @@ export const auditLogs = pgTable(
   ]
 );
 
+export const fonioApiKeys = pgTable(
+  "fonio_api_keys",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    name: text("name").notNull().default("Fonio"),
+    keyPrefix: text("key_prefix").notNull(),
+    keyHash: text("key_hash").notNull().unique(),
+    lastUsedAt: timestamp("last_used_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("fonio_api_keys_client_id_idx").on(table.clientId),
+    index("fonio_api_keys_revoked_at_idx").on(table.revokedAt),
+    uniqueIndex("fonio_api_keys_client_active_idx")
+      .on(table.clientId)
+      .where(sql`${table.revokedAt} is null`)
+  ]
+);
+
 // ── Relations ─────────────────────────────────────────────────────────────────
 
 export const clientRelations = relations(clients, ({ many }) => ({
@@ -352,13 +377,15 @@ export const clientRelations = relations(clients, ({ many }) => ({
   waitingListEntries: many(waitingListEntries),
   waitlistOffers: many(waitlistOffers),
   communicationLogs: many(communicationLogs),
-  auditLogs: many(auditLogs)
+  auditLogs: many(auditLogs),
+  fonioApiKeys: many(fonioApiKeys)
 }));
 
 export const userRelations = relations(user, ({ one, many }) => ({
   client: one(clients, { fields: [user.clientId], references: [clients.id] }),
   sessions: many(session),
-  accounts: many(account)
+  accounts: many(account),
+  fonioApiKeys: many(fonioApiKeys)
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({
@@ -410,6 +437,11 @@ export const waitlistOfferRelations = relations(waitlistOffers, ({ one, many }) 
   communicationLogs: many(communicationLogs)
 }));
 
+export const fonioApiKeyRelations = relations(fonioApiKeys, ({ one }) => ({
+  client: one(clients, { fields: [fonioApiKeys.clientId], references: [clients.id] }),
+  createdByUser: one(user, { fields: [fonioApiKeys.createdByUserId], references: [user.id] })
+}));
+
 // ── Schema export (used by Better Auth adapter and drizzle) ───────────────────
 
 export const schema = {
@@ -427,6 +459,7 @@ export const schema = {
   communicationLogs,
   webhookEvents,
   auditLogs,
+  fonioApiKeys,
   userRelations,
   sessionRelations,
   accountRelations,
@@ -436,5 +469,6 @@ export const schema = {
   slotRelations,
   appointmentRelations,
   waitingListEntryRelations,
-  waitlistOfferRelations
+  waitlistOfferRelations,
+  fonioApiKeyRelations
 };
