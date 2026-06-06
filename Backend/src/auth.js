@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { bearer } from "better-auth/plugins";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { env } from "./config/env.js";
 import { db } from "./db/index.js";
@@ -28,6 +29,7 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true
   },
+  plugins: [bearer()],
   experimental: {
     joins: true
   },

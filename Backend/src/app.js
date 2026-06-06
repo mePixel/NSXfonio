@@ -2,9 +2,13 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
+import { toNodeHandler } from "better-auth/node";
 import { auth } from "./auth.js";
 import { env } from "./config/env.js";
+import { requireAuth } from "./lib/middleware.js";
+import { customersRouter } from "./modules/customers/customers.routes.js";
+import { appointmentsRouter } from "./modules/appointments/appointments.routes.js";
+import { auditRouter } from "./modules/audit/audit.routes.js";
 
 export const app = express();
 
@@ -41,22 +45,13 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "nsxfonio-backend" });
 });
 
-app.get("/api/me", async (req, res, next) => {
-  try {
-    const session = await auth.api.getSession({
-      headers: fromNodeHeaders(req.headers)
-    });
-
-    if (!session) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
-    res.json(session);
-  } catch (error) {
-    next(error);
-  }
+app.get("/api/me", requireAuth, (req, res) => {
+  res.json({ user: req.user, session: req.session });
 });
+
+app.use("/api/customers", customersRouter);
+app.use("/api/appointments", appointmentsRouter);
+app.use("/api/audit-logs", auditRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });
