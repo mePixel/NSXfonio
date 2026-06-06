@@ -4,31 +4,16 @@ import * as React from "react";
 import {
   BadgeCheck,
   Bell,
-  BookOpen,
-  Bot,
-  ChevronRight,
   ChevronsUpDown,
   CreditCard,
-  Folder,
-  Frame,
+  LayoutDashboard,
   LogOut,
-  Map,
-  MoreHorizontal,
-  PieChart,
-  Settings2,
-  Share,
   Sparkles,
-  SquareTerminal,
-  Trash2,
+  UsersRound,
 } from "lucide-react";
+import { NavLink, useLocation } from "react-router";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Calendar } from "@/components/ui/calendar";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,123 +28,25 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { type AuthSession } from "@/lib/auth";
 
-const navMain = [
+const navItems = [
   {
-    title: "Playground",
-    url: "#",
-    icon: SquareTerminal,
-    isActive: true,
-    items: [
-      {
-        title: "History",
-        url: "#",
-      },
-      {
-        title: "Starred",
-        url: "#",
-      },
-      {
-        title: "Settings",
-        url: "#",
-      },
-    ],
+    title: "Dashboard",
+    url: "/",
+    icon: LayoutDashboard,
   },
   {
-    title: "Models",
-    url: "#",
-    icon: Bot,
-    items: [
-      {
-        title: "Genesis",
-        url: "#",
-      },
-      {
-        title: "Explorer",
-        url: "#",
-      },
-      {
-        title: "Quantum",
-        url: "#",
-      },
-    ],
-  },
-  {
-    title: "Documentation",
-    url: "#",
-    icon: BookOpen,
-    items: [
-      {
-        title: "Introduction",
-        url: "#",
-      },
-      {
-        title: "Get Started",
-        url: "#",
-      },
-      {
-        title: "Tutorials",
-        url: "#",
-      },
-      {
-        title: "Changelog",
-        url: "#",
-      },
-    ],
-  },
-  {
-    title: "Settings",
-    url: "#",
-    icon: Settings2,
-    items: [
-      {
-        title: "General",
-        url: "#",
-      },
-      {
-        title: "Team",
-        url: "#",
-      },
-      {
-        title: "Billing",
-        url: "#",
-      },
-      {
-        title: "Limits",
-        url: "#",
-      },
-    ],
-  },
-];
-
-const projects = [
-  {
-    name: "Design Engineering",
-    url: "#",
-    icon: Frame,
-  },
-  {
-    name: "Sales & Marketing",
-    url: "#",
-    icon: PieChart,
-  },
-  {
-    name: "Travel",
-    url: "#",
-    icon: Map,
+    title: "Clients",
+    url: "/clients",
+    icon: UsersRound,
   },
 ];
 
@@ -178,35 +65,13 @@ export function AppSidebar({ session, onSignOut, ...props }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarContent>
-        <DatePicker />
-        <NavMain items={navMain} />
-        <NavProjects projects={projects} />
+        <NavMain items={navItems} />
       </SidebarContent>
       <SidebarFooter>
         <NavUser user={user} onSignOut={onSignOut} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
-  );
-}
-
-function DatePicker() {
-  const [date, setDate] = React.useState<Date | undefined>(
-    new Date(new Date().getFullYear(), new Date().getMonth(), 12),
-  );
-
-  return (
-    <SidebarGroup className="overflow-hidden px-0 transition-[max-height,opacity,padding] duration-200 ease-linear group-data-[collapsible=icon]:max-h-0 group-data-[collapsible=icon]:py-0 group-data-[collapsible=icon]:opacity-0 group-data-[state=expanded]:max-h-80">
-      <SidebarGroupContent className="transition-opacity duration-150 group-data-[collapsible=icon]:pointer-events-none">
-        <Calendar
-          mode="single"
-          selected={date}
-          onSelect={setDate}
-          captionLayout="dropdown"
-          className="bg-transparent [--cell-size:2.1rem]"
-        />
-      </SidebarGroupContent>
-    </SidebarGroup>
   );
 }
 
@@ -217,110 +82,33 @@ function NavMain({
     title: string;
     url: string;
     icon?: React.ComponentType<{ className?: string }>;
-    isActive?: boolean;
-    items?: {
-      title: string;
-      url: string;
-    }[];
   }[];
 }) {
+  const location = useLocation();
+
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Platform</SidebarGroupLabel>
+      <SidebarGroupLabel>Office</SidebarGroupLabel>
       <SidebarMenu>
-        {items.map((item) => (
-          <Collapsible
-            key={item.title}
-            defaultOpen={item.isActive}
-            className="group/collapsible"
-            render={<SidebarMenuItem />}
-          >
-            <CollapsibleTrigger
-              render={<SidebarMenuButton tooltip={item.title} />}
-            >
-              {item.icon ? <item.icon /> : null}
-              <span>{item.title}</span>
-              <ChevronRight className="ml-auto transition-transform duration-200 group-data-open/collapsible:rotate-90" />
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <SidebarMenuSub>
-                {item.items?.map((subItem) => (
-                  <SidebarMenuSubItem key={subItem.title}>
-                    <SidebarMenuSubButton render={<a href={subItem.url} />}>
-                      <span>{subItem.title}</span>
-                    </SidebarMenuSubButton>
-                  </SidebarMenuSubItem>
-                ))}
-              </SidebarMenuSub>
-            </CollapsibleContent>
-          </Collapsible>
-        ))}
-      </SidebarMenu>
-    </SidebarGroup>
-  );
-}
+        {items.map((item) => {
+          const isActive =
+            item.url === "/"
+              ? location.pathname === "/"
+              : location.pathname.startsWith(item.url);
 
-function NavProjects({
-  projects,
-}: {
-  projects: {
-    name: string;
-    url: string;
-    icon: React.ComponentType<{ className?: string }>;
-  }[];
-}) {
-  const { isMobile } = useSidebar();
-
-  return (
-    <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-      <SidebarGroupLabel>Projects</SidebarGroupLabel>
-      <SidebarMenu>
-        {projects.map((item) => (
-          <SidebarMenuItem key={item.name}>
-            <SidebarMenuButton render={<a href={item.url} />}>
-              <item.icon />
-              <span>{item.name}</span>
-            </SidebarMenuButton>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <SidebarMenuAction
-                    showOnHover
-                    className="aria-expanded:bg-muted"
-                  />
-                }
+          return (
+            <SidebarMenuItem key={item.title}>
+              <SidebarMenuButton
+                isActive={isActive}
+                tooltip={item.title}
+                render={<NavLink to={item.url} end={item.url === "/"} />}
               >
-                <MoreHorizontal />
-                <span className="sr-only">More</span>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className="w-fit"
-                side={isMobile ? "bottom" : "right"}
-                align={isMobile ? "end" : "start"}
-              >
-                <DropdownMenuItem>
-                  <Folder />
-                  <span>View Project</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Share />
-                  <span>Share Project</span>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive">
-                  <Trash2 />
-                  <span>Delete Project</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </SidebarMenuItem>
-        ))}
-        <SidebarMenuItem>
-          <SidebarMenuButton className="text-sidebar-foreground/70">
-            <MoreHorizontal className="text-sidebar-foreground/70" />
-            <span>More</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+                {item.icon ? <item.icon /> : null}
+                <span>{item.title}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          );
+        })}
       </SidebarMenu>
     </SidebarGroup>
   );

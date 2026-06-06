@@ -68,6 +68,21 @@ export const verification = pgTable(
   (table) => [index("verification_identifier_idx").on(table.identifier)]
 );
 
+export const clients = pgTable(
+  "clients",
+  {
+    id: text("id").primaryKey(),
+    firstName: text("first_name").notNull(),
+    lastName: text("last_name").notNull(),
+    telephoneNumber: text("telephone_number").notNull(),
+    email: text("email").notNull(),
+    description: text("description").notNull().default(""),
+    createdAt: timestamp("created_at").notNull(),
+    updatedAt: timestamp("updated_at").notNull()
+  },
+  (table) => [index("clients_created_at_idx").on(table.createdAt)]
+);
+
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account)
@@ -92,6 +107,7 @@ export const schema = {
   session,
   account,
   verification,
+  clients,
   userRelations,
   sessionRelations,
   accountRelations

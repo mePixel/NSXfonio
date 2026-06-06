@@ -1,6 +1,8 @@
 import { createBrowserRouter, redirect } from "react-router"
 
 import App from "@/App"
+import { ClientsPage } from "@/routes/clients"
+import { clientsAction, clientsLoader } from "@/routes/clients-data"
 import { getCurrentSession } from "@/lib/auth"
 import { DashboardPage } from "@/routes/dashboard"
 import { LoadingPage } from "@/routes/loading"
@@ -49,6 +51,12 @@ export const router = createBrowserRouter([
       {
         index: true,
         element: <DashboardPage />,
+      },
+      {
+        path: "clients",
+        loader: clientsLoader,
+        action: clientsAction,
+        element: <ClientsPage />,
       },
       {
         path: "*",

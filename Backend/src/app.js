@@ -1,10 +1,14 @@
 import cors from "cors";
+import { randomUUID } from "node:crypto";
+import { desc } from "drizzle-orm";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
 import { auth } from "./auth.js";
 import { env } from "./config/env.js";
+import { db } from "./db/index.js";
+import { clients } from "./db/schema.js";
 
 export const app = express();
 
@@ -41,18 +45,114 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "nsxfonio-backend" });
 });
 
+async function getRequestSession(req) {
+  return auth.api.getSession({
+    headers: fromNodeHeaders(req.headers)
+  });
+}
+
+async function requireSession(req, res) {
+  const session = await getRequestSession(req);
+
+  if (!session) {
+    res.status(401).json({ error: "Unauthorized" });
+    return null;
+  }
+
+  return session;
+}
+
+function readRequiredString(body, field, label, errors) {
+  const value = typeof body?.[field] === "string" ? body[field].trim() : "";
+
+  if (!value) {
+    errors[field] = `${label} is required.`;
+  }
+
+  return value;
+}
+
+function validateClientPayload(body) {
+  const errors = {};
+  const firstName = readRequiredString(body, "firstName", "First name", errors);
+  const lastName = readRequiredString(body, "lastName", "Last name", errors);
+  const telephoneNumber = readRequiredString(body, "telephoneNumber", "Telephone number", errors);
+  const email = readRequiredString(body, "email", "Email", errors);
+  const description = typeof body?.description === "string" ? body.description.trim() : "";
+
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errors.email = "Email must be valid.";
+  }
+
+  return {
+    values: {
+      firstName,
+      lastName,
+      telephoneNumber,
+      email,
+      description
+    },
+    errors
+  };
+}
+
 app.get("/api/me", async (req, res, next) => {
   try {
-    const session = await auth.api.getSession({
-      headers: fromNodeHeaders(req.headers)
-    });
+    const session = await requireSession(req, res);
 
     if (!session) {
-      res.status(401).json({ error: "Unauthorized" });
       return;
     }
 
     res.json(session);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/clients", async (req, res, next) => {
+  try {
+    const session = await requireSession(req, res);
+
+    if (!session) {
+      return;
+    }
+
+    const rows = await db.select().from(clients).orderBy(desc(clients.createdAt));
+
+    res.json({ clients: rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/clients", async (req, res, next) => {
+  try {
+    const session = await requireSession(req, res);
+
+    if (!session) {
+      return;
+    }
+
+    const { values, errors } = validateClientPayload(req.body);
+
+    if (Object.keys(errors).length > 0) {
+      res.status(400).json({ error: "Validation failed", errors });
+      return;
+    }
+
+    const now = new Date();
+    const [client] = await db
+      .insert(clients)
+      .values({
+        id: randomUUID(),
+        ...values,
+        createdAt: now,
+        updatedAt: now
+      })
+      .returning();
+
+    res.status(201).json({ clients: [client] });
   } catch (error) {
     next(error);
   }
