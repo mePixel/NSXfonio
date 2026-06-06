@@ -21,6 +21,37 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
+function getSearchWindow(search, { now, defaultWindowDays }) {
+  const exactStart = parseDate(
+    search?.startsAt
+      ?? search?.requestedStartsAt
+      ?? search?.time
+      ?? search?.datetime
+      ?? null
+  );
+  const from = exactStart ?? parseDate(search?.from) ?? now;
+  const parsedTo = parseDate(
+    search?.endsAt
+      ?? search?.requestedEndsAt
+      ?? search?.to
+      ?? null
+  );
+
+  if (parsedTo && parsedTo > from) {
+    return { from, to: parsedTo };
+  }
+
+  if (exactStart || (parsedTo && parsedTo.getTime() === from.getTime())) {
+    return { from, to: addMinutes(from, 30) };
+  }
+
+  return { from, to: addMinutes(from, defaultWindowDays * 24 * 60) };
+}
+
 function timeOfDayMatches(date, timeOfDay) {
   if (!timeOfDay) return true;
 
@@ -268,8 +299,7 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
     ? await findWaitlistEntryByCustomer(clientId, customer.id)
     : null;
 
-  const from = parseDate(search?.from) ?? now;
-  const to = parseDate(search?.to) ?? new Date(from.getTime() + defaultWindowDays * 24 * 60 * 60 * 1000);
+  const { from, to } = getSearchWindow(search, { now, defaultWindowDays });
   const timeOfDay = typeof search?.timeOfDay === "string" ? search.timeOfDay : null;
 
   if (to <= from) {

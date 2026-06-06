@@ -119,6 +119,9 @@ For dynamic availability lookup during the call, use:
 
 - `POST /api/fonio/inbound-search-slots`
 
+For an exact requested appointment time, send `search.startsAt` or send the same timestamp for `search.from` and `search.to`.
+The backend treats that as a 30-minute lookup window.
+
 Example request body:
 
 ```json
