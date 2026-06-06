@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { webhookEvents, waitlistOffers } from "../../db/schema.js";
-import { advanceOfferCycle } from "../waitlist/offers.service.js";
+import { advanceOfferCycle, moveWaitlistEntryToEnd } from "../waitlist/offers.service.js";
 import { handleInboundAppointmentWebhook, isInboundAppointmentWebhook } from "./fonio.inbound.service.js";
 
 async function storeWebhookEvent(payload) {
@@ -52,6 +52,7 @@ async function handleOutboundWebhook(payload) {
     await db.update(waitlistOffers)
       .set({ status: "call_no_answer", updatedAt: new Date() })
       .where(eq(waitlistOffers.id, offerId));
+    await moveWaitlistEntryToEnd(offer.clientId, offer.waitingListEntryId);
     await advanceOfferCycle(offer.clientId, offerId);
     return { handled: true, mode: "outbound", outcome: "call_no_answer", offerId };
   }

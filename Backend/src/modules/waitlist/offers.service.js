@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, asc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { communicationLogs, waitingListEntries, waitlistOffers } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
@@ -40,15 +40,64 @@ async function getNextEntry(clientId, slotId) {
     const entryOffers = existingOffers.filter(o => o.waitingListEntryId === entry.id);
     const hasActive   = entryOffers.some(o => ACTIVE_STATUSES.includes(o.status));
     const hasAccepted = entryOffers.some(o => o.status === "accepted");
+    const hasTriedThisSlot = entryOffers.length > 0;
     const hasOtherActiveOffer = activeOffersOtherSlots.some((offer) => {
       const offeredEntry = entryById.get(offer.waitingListEntryId);
       return offeredEntry?.customerId === entry.customerId;
     });
 
-    if (!hasActive && !hasAccepted && !hasOtherActiveOffer) return entry;
+    if (!hasActive && !hasAccepted && !hasTriedThisSlot && !hasOtherActiveOffer) return entry;
   }
 
   return null;
+}
+
+export async function moveWaitlistEntryToEnd(clientId, waitingListEntryId) {
+  const [entry] = await db
+    .select()
+    .from(waitingListEntries)
+    .where(and(
+      eq(waitingListEntries.clientId, clientId),
+      eq(waitingListEntries.id, waitingListEntryId)
+    ));
+
+  if (!entry) return null;
+
+  const [lastEntry] = await db
+    .select({ position: waitingListEntries.position })
+    .from(waitingListEntries)
+    .where(eq(waitingListEntries.clientId, clientId))
+    .orderBy(desc(waitingListEntries.position))
+    .limit(1);
+
+  const nextPosition = lastEntry?.position ?? entry.position;
+  if (entry.position >= nextPosition) {
+    return entry;
+  }
+
+  return db.transaction(async (tx) => {
+    await tx
+      .update(waitingListEntries)
+      .set({
+        position: sql`${waitingListEntries.position} - 1`,
+        updatedAt: new Date()
+      })
+      .where(and(
+        eq(waitingListEntries.clientId, clientId),
+        gt(waitingListEntries.position, entry.position)
+      ));
+
+    const [updated] = await tx
+      .update(waitingListEntries)
+      .set({
+        position: nextPosition,
+        updatedAt: new Date()
+      })
+      .where(eq(waitingListEntries.id, entry.id))
+      .returning();
+
+    return updated;
+  });
 }
 
 async function callEntry(clientId, slot, entry, offer) {

@@ -46,6 +46,16 @@ function getCustomerPayload(payload) {
   return payload?.customer ?? payload?.caller ?? payload?.contact ?? null;
 }
 
+function getSearchAttemptCount(payload) {
+  const raw = payload?.search?.attemptCount
+    ?? payload?.search?.offerCount
+    ?? payload?.attemptCount
+    ?? payload?.offerCount
+    ?? 0;
+  const count = Number(raw);
+  return Number.isInteger(count) && count > 0 ? count : 0;
+}
+
 function wantsWaitlist(payload, booking) {
   const value = booking?.joinWaitlist
     ?? booking?.waitlist
@@ -239,6 +249,7 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
   const callerPhone = getRequestedPhone(payload);
   const calledNumber = getCalledNumber(payload);
   const search = payload?.search ?? {};
+  const attemptCount = getSearchAttemptCount(payload);
 
   if (!clientId) {
     return {
@@ -249,6 +260,13 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
       matches: []
     };
   }
+
+  const customer = callerPhone
+    ? await findCustomerByPhone(clientId, callerPhone)
+    : null;
+  const waitlistEntry = customer
+    ? await findWaitlistEntryByCustomer(clientId, customer.id)
+    : null;
 
   const from = parseDate(search?.from) ?? now;
   const to = parseDate(search?.to) ?? new Date(from.getTime() + defaultWindowDays * 24 * 60 * 60 * 1000);
@@ -287,10 +305,18 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
       to,
       timeOfDay
     },
+    waitlist: {
+      offerSpontaneousAppointments: true,
+      alreadyJoined: Boolean(waitlistEntry),
+      position: waitlistEntry?.position ?? null,
+      askAfterOfferCount: 3
+    },
     matches,
     promptHints: {
       bookingAvailable: matches.length > 0,
-      reason: matches.length > 0 ? null : "no_matching_slots"
+      reason: matches.length > 0 ? null : "no_matching_slots",
+      offerCountTried: attemptCount,
+      shouldOfferWaitlist: !waitlistEntry && (matches.length === 0 || attemptCount >= 3)
     }
   };
 }
@@ -565,5 +591,35 @@ export async function handleInboundCancellation(payload) {
     appointmentId: cancelled.id,
     status: cancelled.status,
     releasedSlotId: matchedAppointment.slotId ?? null
+  };
+}
+
+export async function handleInboundWaitlist(payload) {
+  const client = await resolveClient(payload);
+  const clientId = client?.id ?? null;
+  const callerPhone = getRequestedPhone(payload);
+  const calledNumber = getCalledNumber(payload);
+
+  if (!clientId) {
+    return { handled: false, reason: "unresolved_client", callerPhone, calledNumber };
+  }
+
+  const customer = await findOrCreateInboundCustomer(clientId, payload);
+  const waitlistResult = await createWaitlistEntryForCustomer(clientId, customer.id, {
+    notes: typeof payload?.waitlist?.notes === "string" && payload.waitlist.notes.trim()
+      ? payload.waitlist.notes.trim()
+      : "Requested spontaneous earlier appointment dates during Fonio call."
+  });
+
+  return {
+    handled: true,
+    mode: "inbound_waitlist",
+    clientId,
+    customerId: customer.id,
+    waitlist: {
+      entryId: waitlistResult.entry.id,
+      created: waitlistResult.created,
+      position: waitlistResult.entry.position
+    }
   };
 }

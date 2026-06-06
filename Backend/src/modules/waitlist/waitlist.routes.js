@@ -16,13 +16,25 @@ waitlistRouter.get("/", async (req, res, next) => {
 waitlistRouter.post("/", async (req, res, next) => {
   try {
     const customerId = uuid(req.body.customerId);
-    const position   = int(req.body.position, { min: 1 });
     const notes      = str(req.body.notes, { max: 2000 });
 
     if (!customerId) { res.status(400).json({ error: "customerId must be a valid UUID" }); return; }
-    if (!position)   { res.status(400).json({ error: "position must be a positive integer" }); return; }
 
-    res.status(201).json(await service.createWaitlistEntry(req.user.clientId, { customerId, position, notes }));
+    let result;
+    if (req.body.position !== undefined) {
+      const position = int(req.body.position, { min: 1 });
+      if (!position) { res.status(400).json({ error: "position must be a positive integer" }); return; }
+      result = await service.createWaitlistEntry(req.user.clientId, { customerId, position, notes });
+    } else {
+      result = await service.createWaitlistEntryForCustomer(req.user.clientId, customerId, { notes });
+    }
+
+    if ("created" in result) {
+      res.status(result.created ? 201 : 200).json(result);
+      return;
+    }
+
+    res.status(201).json(result);
   } catch (error) { next(error); }
 });
 
@@ -52,6 +64,17 @@ waitlistRouter.patch("/:id", async (req, res, next) => {
 
     const entry = await service.updateWaitlistEntry(req.user.clientId, id, updates);
     if (!entry) { res.status(404).json({ error: "Waitlist entry not found" }); return; }
+    res.json(entry);
+  } catch (error) { next(error); }
+});
+
+waitlistRouter.delete("/by-customer/:customerId", async (req, res, next) => {
+  try {
+    const customerId = uuid(req.params.customerId);
+    if (!customerId) { res.status(400).json({ error: "Invalid customerId" }); return; }
+
+    const entry = await service.deleteWaitlistEntryByCustomer(req.user.clientId, customerId);
+    if (!entry) { res.status(404).json({ error: "Waitlist entry not found for customer" }); return; }
     res.json(entry);
   } catch (error) { next(error); }
 });

@@ -147,6 +147,12 @@ Example response:
     "to": "2026-06-27T00:00:00.000Z",
     "timeOfDay": "morning"
   },
+  "waitlist": {
+    "offerSpontaneousAppointments": true,
+    "alreadyJoined": false,
+    "position": null,
+    "askAfterOfferCount": 3
+  },
   "matches": [
     {
       "id": "slot-1",
@@ -157,7 +163,9 @@ Example response:
   ],
   "promptHints": {
     "bookingAvailable": true,
-    "reason": null
+    "reason": null,
+    "offerCountTried": 2,
+    "shouldOfferWaitlist": false
   }
 }
 ```
@@ -167,6 +175,53 @@ Supported `timeOfDay` values:
 - `morning`
 - `afternoon`
 - `evening`
+
+Fonio should track how many concrete appointment offers were tried with the caller and pass that as `search.attemptCount`.
+If `promptHints.shouldOfferWaitlist` becomes `true`, the agent should offer to add the caller to the waitlist for spontaneous earlier dates.
+
+For waitlist enrollment without booking, use:
+
+- `POST /api/fonio/inbound-waitlist`
+
+Example request body:
+
+```json
+{
+  "fromNumber": "+436641234567",
+  "toNumber": "+43123456789",
+  "customer": {
+    "firstName": "Anna",
+    "lastName": "Mueller",
+    "email": "anna@example.com"
+  },
+  "waitlist": {
+    "notes": "Caller wants spontaneous earlier appointment dates after no suitable slot was found."
+  },
+  "direction": "inbound"
+}
+```
+
+Success response:
+
+```json
+{
+  "handled": true,
+  "mode": "inbound_waitlist",
+  "clientId": "actual-client-id",
+  "customerId": "customer-id",
+  "waitlist": {
+    "entryId": "waitlist-entry-id",
+    "created": true,
+    "position": 4
+  }
+}
+```
+
+Waitlist offer rule:
+
+- if a waitlist call returns `no_answer`, that customer is moved to the end of the waitlist
+- they are not offered that same freed slot again
+- the system immediately advances to the next eligible waitlist entry for that slot
 
 For looking up the caller's cancellable appointments during the call, use:
 
