@@ -60,8 +60,8 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
     return updated;
   });
 
-  if (toStatus === "cancelled" && existing.slotId) {
-    await autoStartOfferCycle(clientId, existing.slotId, { userId });
+  if (toStatus === "cancelled" && updated?.slotId) {
+    await autoStartOfferCycle(clientId, updated.slotId, { userId });
   }
 
   return updated;

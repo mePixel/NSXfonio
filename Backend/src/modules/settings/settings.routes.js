@@ -1,11 +1,67 @@
 import { Router } from "express";
+import { eq } from "drizzle-orm";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
+import { db } from "../../db/index.js";
+import { clients, user } from "../../db/schema.js";
 import { str } from "../../lib/sanitize.js";
 import { getActiveFonioApiKey, revokeFonioApiKey, rotateFonioApiKey } from "./settings.service.js";
 
 export const settingsRouter = Router();
 
-settingsRouter.use(requireAuth, requireClient);
+const DEFAULT_CLIENT_ID = "default-client";
+
+async function ensureFonioClient(req, _res, next) {
+  if (req.user?.clientId) {
+    next();
+    return;
+  }
+
+  try {
+    const now = new Date();
+
+    const [createdClient] = await db
+      .insert(clients)
+      .values({
+        id: DEFAULT_CLIENT_ID,
+        name: "Default Practice",
+        createdAt: now,
+        updatedAt: now
+      })
+      .onConflictDoNothing()
+      .returning({ id: clients.id });
+
+    const ensuredClient =
+      createdClient
+      ?? (
+        await db
+          .select({ id: clients.id })
+          .from(clients)
+          .where(eq(clients.id, DEFAULT_CLIENT_ID))
+          .limit(1)
+      )[0];
+
+    if (!ensuredClient) {
+      next();
+      return;
+    }
+
+    const [updatedUser] = await db
+      .update(user)
+      .set({ clientId: ensuredClient.id })
+      .where(eq(user.id, req.user.id))
+      .returning();
+
+    if (updatedUser) {
+      req.user = updatedUser;
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+settingsRouter.use(requireAuth, ensureFonioClient, requireClient);
 
 settingsRouter.get("/fonio-api-key", async (req, res, next) => {
   try {
