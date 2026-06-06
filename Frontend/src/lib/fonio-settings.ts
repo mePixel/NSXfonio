@@ -46,16 +46,32 @@ export async function loadFonioApiKey() {
 }
 
 export async function rotateFonioApiKey(name: string) {
-  const response = await fetch(`${apiURL}/api/settings/fonio-api-key`, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ name }),
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${apiURL}/api/settings/fonio-api-key`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    });
+  } catch {
+    return {
+      ok: false as const,
+      message: "Unable to reach the backend. Start the backend server and try again.",
+    };
+  }
 
   await ensureAuthenticated(response, "/settings");
+
+  if (response.status === 404) {
+    return {
+      ok: false as const,
+      message: "The settings API is unavailable. Restart the backend so the settings routes are loaded.",
+    };
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: "Unable to rotate API key." }));
@@ -72,12 +88,28 @@ export async function rotateFonioApiKey(name: string) {
 }
 
 export async function revokeFonioApiKey() {
-  const response = await fetch(`${apiURL}/api/settings/fonio-api-key`, {
-    method: "DELETE",
-    credentials: "include",
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${apiURL}/api/settings/fonio-api-key`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+  } catch {
+    return {
+      ok: false as const,
+      message: "Unable to reach the backend. Start the backend server and try again.",
+    };
+  }
 
   await ensureAuthenticated(response, "/settings");
+
+  if (response.status === 404) {
+    return {
+      ok: false as const,
+      message: "The settings API is unavailable. Restart the backend so the settings routes are loaded.",
+    };
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: "Unable to revoke API key." }));

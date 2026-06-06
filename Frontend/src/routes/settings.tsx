@@ -1,6 +1,6 @@
 import * as React from "react";
 import { KeyRound, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
-import { useFetcher, useLoaderData, useRevalidator } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,17 +15,10 @@ type SettingsActionData =
 export function SettingsPage() {
   const { apiKey } = useLoaderData() as SettingsLoaderData;
   const fetcher = useFetcher<SettingsActionData>();
-  const revalidator = useRevalidator();
   const [name, setName] = React.useState(apiKey?.name ?? "Fonio");
   const latestCreatedKey = fetcher.data && fetcher.data.ok && "apiKey" in fetcher.data
     ? fetcher.data.apiKey
     : null;
-
-  React.useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.ok) {
-      void revalidator.revalidate();
-    }
-  }, [fetcher.data, fetcher.state, revalidator]);
 
   const isBusy = fetcher.state !== "idle";
   const activeKey = apiKey && !apiKey.revokedAt ? apiKey : null;

@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { communicationLogs, waitingListEntries, waitlistOffers } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
@@ -25,11 +25,12 @@ async function getNextEntry(clientId, slotId) {
     .from(waitlistOffers)
     .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.slotId, slotId)));
 
-  const activeOffers = await db
+  const activeOffersOtherSlots = await db
     .select()
     .from(waitlistOffers)
     .where(and(
       eq(waitlistOffers.clientId, clientId),
+      ne(waitlistOffers.slotId, slotId),
       inArray(waitlistOffers.status, ACTIVE_STATUSES)
     ));
 
@@ -39,9 +40,7 @@ async function getNextEntry(clientId, slotId) {
     const entryOffers = existingOffers.filter(o => o.waitingListEntryId === entry.id);
     const hasActive   = entryOffers.some(o => ACTIVE_STATUSES.includes(o.status));
     const hasAccepted = entryOffers.some(o => o.status === "accepted");
-    const hasOtherActiveOffer = activeOffers.some((offer) => {
-      if (offer.slotId === slotId) return false;
-
+    const hasOtherActiveOffer = activeOffersOtherSlots.some((offer) => {
       const offeredEntry = entryById.get(offer.waitingListEntryId);
       return offeredEntry?.customerId === entry.customerId;
     });
@@ -131,7 +130,14 @@ export async function startOfferCycle(clientId, slotId, { userId = null, respons
     })
     .returning();
 
-  await callEntry(clientId, slot, entry, offer);
+  try {
+    await callEntry(clientId, slot, entry, offer);
+  } catch (error) {
+    await db.update(waitlistOffers)
+      .set({ status: "timed_out" })
+      .where(eq(waitlistOffers.id, offer.id));
+    throw error;
+  }
 
   await writeAuditLog({
     clientId,
@@ -204,7 +210,7 @@ export async function autoStartOfferCycle(clientId, slotId, options = {}) {
   try {
     return await startOfferCycle(clientId, slotId, options);
   } catch (error) {
-    if ([404, 409, 422].includes(error?.status)) {
+    if (error?.status === 404 || error?.status === 409) {
       return null;
     }
 

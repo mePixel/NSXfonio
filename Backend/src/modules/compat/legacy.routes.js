@@ -162,6 +162,18 @@ function formatTime(date) {
 async function ensureAppointmentSettings() {
   const now = new Date();
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "appointment_settings" (
+      "id" text PRIMARY KEY NOT NULL,
+      "time_slot_size" integer NOT NULL,
+      "working_days" text NOT NULL,
+      "office_hours_start" text DEFAULT '08:00' NOT NULL,
+      "office_hours_end" text DEFAULT '17:00' NOT NULL,
+      "created_at" timestamp NOT NULL,
+      "updated_at" timestamp NOT NULL
+    )
+  `);
+
   await pool.query(
     `
       INSERT INTO "appointment_settings" (
