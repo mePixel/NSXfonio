@@ -24,6 +24,7 @@ async function storeWebhookEvent(payload) {
     const isDuplicateExternalEvent = error?.code === "23505"
       && (
         error?.constraint === "webhook_events_external_event_id_unique"
+        || String(error?.constraint ?? "").includes("webhook_events")
         || String(error?.detail ?? "").includes("external_event_id")
       );
 
@@ -36,7 +37,12 @@ async function storeWebhookEvent(payload) {
 
 async function handleOutboundWebhook(payload) {
   const offerId = payload?.context?.offerId;
-  const callStatus = payload?.status ?? payload?.callStatus ?? payload?.outcome;
+  const callStatus = payload?.status
+    ?? payload?.callStatus
+    ?? payload?.outcome
+    ?? payload?.disconnectReason
+    ?? payload?.endReason
+    ?? payload?.hangupReason;
 
   if (!offerId || !callStatus) {
     return { handled: false, mode: "outbound", reason: "no_offer_context" };
@@ -52,7 +58,18 @@ async function handleOutboundWebhook(payload) {
   }
 
   const normalizedStatus = String(callStatus).toLowerCase();
-  const noAnswer = ["no-answer", "no_answer", "noanswer", "missed", "unanswered"].includes(normalizedStatus);
+  const noAnswer = [
+    "no-answer",
+    "no_answer",
+    "noanswer",
+    "missed",
+    "unanswered",
+    "inactivity",
+    "timeout",
+    "timed_out",
+    "busy",
+    "failed"
+  ].includes(normalizedStatus);
   const answered = ["completed", "answered", "success"].includes(normalizedStatus);
 
   if (noAnswer) {
@@ -61,11 +78,25 @@ async function handleOutboundWebhook(payload) {
       .where(eq(waitlistOffers.id, offerId));
     await syncReschedulerOfferOutcome(offer.clientId, offerId);
     await moveWaitlistEntryToEnd(offer.clientId, offer.waitingListEntryId);
-    const advanced = await advanceOfferCycle(offer.clientId, offerId);
-    if (advanced.nextOffer?.id) {
-      await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+    let advanced = { nextOffer: null };
+    try {
+      advanced = await advanceOfferCycle(offer.clientId, offerId);
+      if (advanced.nextOffer?.id) {
+        await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+      }
+    } catch (error) {
+      console.error("[fonio webhook] failed to advance waitlist offer after no answer", {
+        offerId,
+        error: error?.message ?? error
+      });
     }
-    return { handled: true, mode: "outbound", outcome: "call_no_answer", offerId };
+    return {
+      handled: true,
+      mode: "outbound",
+      outcome: "call_no_answer",
+      offerId,
+      advanced: Boolean(advanced.nextOffer)
+    };
   }
 
   if (answered) {
@@ -87,9 +118,11 @@ export async function processFonioWebhook(payload) {
 
   console.log("[fonio webhook]", JSON.stringify(payload, null, 2));
 
-  const result = isInboundAppointmentWebhook(payload)
-    ? await handleInboundAppointmentWebhook(payload)
-    : await handleOutboundWebhook(payload);
+  const result = payload?.context?.offerId
+    ? await handleOutboundWebhook(payload)
+    : isInboundAppointmentWebhook(payload)
+      ? await handleInboundAppointmentWebhook(payload)
+      : await handleOutboundWebhook(payload);
 
   if (stored.event) {
     await db.update(webhookEvents)
