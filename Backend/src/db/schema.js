@@ -57,7 +57,8 @@ export const reschedulerCandidateCallStateEnum = pgEnum("rescheduler_candidate_c
 
 export const communicationChannelEnum = pgEnum("communication_channel", [
   "call",
-  "whatsapp"
+  "whatsapp",
+  "email"
 ]);
 
 export const communicationDirectionEnum = pgEnum("communication_direction", [

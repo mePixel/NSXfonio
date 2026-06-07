@@ -55,5 +55,13 @@ export const env = {
   fonioAgentId: process.env.FONIO_AGENT_ID,
   fonioSharedSecret: process.env.FONIO_SHARED_SECRET,
   fonioDefaultClientId: process.env.FONIO_DEFAULT_CLIENT_ID || null,
-  fonioToNumberClientMap: parseJsonObject(process.env.FONIO_TO_NUMBER_CLIENT_MAP)
+  fonioToNumberClientMap: parseJsonObject(process.env.FONIO_TO_NUMBER_CLIENT_MAP),
+  // Email configuration
+  smtpHost: process.env.SMTP_HOST,
+  smtpPort: Number(process.env.SMTP_PORT || 587),
+  smtpSecure: process.env.SMTP_SECURE === "true",
+  smtpUser: process.env.SMTP_USER,
+  smtpPassword: process.env.SMTP_PASSWORD,
+  smtpFromEmail: process.env.SMTP_FROM_EMAIL,
+  smtpReplyTo: process.env.SMTP_REPLY_TO
 };
