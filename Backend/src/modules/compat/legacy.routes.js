@@ -18,6 +18,7 @@ const MIN_RESCHEDULER_CANDIDATE_WINDOW = 1;
 const MAX_RESCHEDULER_CANDIDATE_WINDOW = 10;
 const SUPPORTED_TIME_SLOT_SIZES = new Set([15, 30, 60]);
 const SLOT_GENERATION_DAYS = 30;
+const OFFICE_TIME_ZONE = "Europe/Vienna";
 
 export const legacyRouter = Router();
 
@@ -137,7 +138,13 @@ function normalizeAppointmentSettings(row) {
 }
 
 function getWeekday(dateString) {
-  return new Date(`${dateString}T00:00:00`).getDay();
+  if (!isDateString(dateString)) {
+    return null;
+  }
+
+  const [year, month, day] = dateString.split("-").map((part) => Number(part));
+
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 }
 
 function generateTimeSlots({ timeSlotSize, officeHoursStart, officeHoursEnd }) {
@@ -156,32 +163,75 @@ function generateTimeSlots({ timeSlotSize, officeHoursStart, officeHoursEnd }) {
   return slots;
 }
 
-function dateAndTimeToDate(date, time) {
-  return new Date(`${date}T${time}:00`);
+function getOfficeParts(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: OFFICE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+function getOfficeOffsetMs(date) {
+  const parts = getOfficeParts(date);
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+
+  return asUtc - date.getTime();
+}
+
+function officeDateAndTimeToDate(date, time) {
+  const [year, month, day] = date.split("-").map((part) => Number(part));
+  const [hour, minute] = time.split(":").map((part) => Number(part));
+  let utcTime = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+
+  utcTime -= getOfficeOffsetMs(new Date(utcTime));
+  utcTime = Date.UTC(year, month - 1, day, hour, minute, 0, 0) - getOfficeOffsetMs(new Date(utcTime));
+
+  return new Date(utcTime);
 }
 
 function addMinutes(date, minutes) {
   return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
-function addDays(date, days) {
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+function officeDateString(date) {
+  const parts = getOfficeParts(date);
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function startOfDay(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
+function addDaysToDateString(dateString, days) {
+  const [year, month, day] = dateString.split("-").map((part) => Number(part));
+  const date = new Date(Date.UTC(year, month - 1, day + days));
 
-function formatDate(date) {
   return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0")
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0")
   ].join("-");
 }
 
+function formatDate(date) {
+  return officeDateString(date);
+}
+
 function formatTime(date) {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const parts = getOfficeParts(date);
+
+  return `${parts.hour}:${parts.minute}`;
 }
 
 async function ensureAppointmentSettings() {
@@ -280,8 +330,10 @@ async function ensureClientSchedules(clientId, settings) {
 
 async function syncSlotsFromAppointmentSettings(clientId, settings, { now = new Date(), horizonDays = SLOT_GENERATION_DAYS } = {}) {
   const scheduleIdsByDay = await ensureClientSchedules(clientId, settings);
-  const rangeStart = startOfDay(now);
-  const rangeEnd = addDays(rangeStart, horizonDays);
+  const rangeStartDate = officeDateString(now);
+  const rangeEndDate = addDaysToDateString(rangeStartDate, horizonDays);
+  const rangeStart = officeDateAndTimeToDate(rangeStartDate, "00:00");
+  const rangeEnd = officeDateAndTimeToDate(rangeEndDate, "00:00");
 
   const existingSlots = await db
     .select()
@@ -319,7 +371,7 @@ async function syncSlotsFromAppointmentSettings(clientId, settings, { now = new 
 
     if (!slot) {
       const id = randomUUID();
-      const scheduleId = scheduleIdsByDay.get(appointment.startsAt.getDay()) ?? null;
+      const scheduleId = scheduleIdsByDay.get(getWeekday(formatDate(appointment.startsAt))) ?? null;
       await db.insert(slots).values({
         id,
         clientId,
@@ -371,8 +423,8 @@ async function syncSlotsFromAppointmentSettings(clientId, settings, { now = new 
   }
 
   for (let dayOffset = 0; dayOffset < horizonDays; dayOffset += 1) {
-    const date = addDays(rangeStart, dayOffset);
-    const dayOfWeek = date.getDay();
+    const date = addDaysToDateString(rangeStartDate, dayOffset);
+    const dayOfWeek = getWeekday(date);
 
     if (!settings.workingDays.includes(dayOfWeek)) {
       continue;
@@ -381,7 +433,7 @@ async function syncSlotsFromAppointmentSettings(clientId, settings, { now = new 
     const scheduleId = scheduleIdsByDay.get(dayOfWeek) ?? null;
 
     for (let minutes = startMinutes; minutes < endMinutes; minutes += settings.timeSlotSize) {
-      const startsAt = new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(minutes / 60), minutes % 60, 0, 0);
+      const startsAt = officeDateAndTimeToDate(date, minutesToSlot(minutes));
       const endsAt = addMinutes(startsAt, settings.timeSlotSize);
       const key = `${startsAt.toISOString()}|${endsAt.toISOString()}`;
 
@@ -810,8 +862,8 @@ legacyRouter.get("/appointments", requireAuth, requireClient, async (req, res, n
         return;
       }
 
-      const start = dateAndTimeToDate(startDate, "00:00");
-      const end = addMinutes(dateAndTimeToDate(endDate, "00:00"), 24 * 60);
+      const start = officeDateAndTimeToDate(startDate, "00:00");
+      const end = officeDateAndTimeToDate(addDaysToDateString(endDate, 1), "00:00");
       const rows = await db
         .select({ startsAt: appointments.startsAt })
         .from(appointments)
@@ -847,8 +899,8 @@ legacyRouter.get("/appointments", requireAuth, requireClient, async (req, res, n
       return;
     }
 
-    const start = dateAndTimeToDate(date, "00:00");
-    const end = addMinutes(start, 24 * 60);
+    const start = officeDateAndTimeToDate(date, "00:00");
+    const end = officeDateAndTimeToDate(addDaysToDateString(date, 1), "00:00");
     const rows = await db
       .select(appointmentSelect())
       .from(appointments)
@@ -882,7 +934,7 @@ legacyRouter.post("/appointments", requireAuth, requireClient, async (req, res, 
       return;
     }
 
-    const startsAt = dateAndTimeToDate(values.appointmentDate, values.timeSlot);
+    const startsAt = officeDateAndTimeToDate(values.appointmentDate, values.timeSlot);
     const endsAt = addMinutes(startsAt, values.settings.timeSlotSize);
     const [existingAppointment] = await db
       .select({ id: appointments.id })
