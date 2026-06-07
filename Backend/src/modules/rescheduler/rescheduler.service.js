@@ -874,8 +874,6 @@ export async function completeAcceptedReschedulerOffer(
     throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
   }
 
-
-  const candidateWindow = await getReschedulerCandidateWindow();
   const resolvedCandidateWindow = candidateWindow ?? await getReschedulerCandidateWindow();
   const upcomingAppointments = (await listUpcomingAppointmentsForCustomer(clientId, offer.customerId))
     .slice(0, resolvedCandidateWindow);
@@ -1144,77 +1142,6 @@ export async function acceptReschedulerSlotBooking(
   });
 
   return serializeAcceptResult(result);
-}
-
-export async function completeAcceptedReschedulerOfferPublic(
-  candidateId,
-  { selectedAppointmentId = null, payload = null } = {}
-) {
-  const [candidate] = await db
-    .select({
-      clientId: reschedulerCandidateCalls.clientId,
-      offerId: reschedulerCandidateCalls.waitlistOfferId,
-      responseDeadlineAt: waitlistOffers.responseDeadlineAt
-    })
-    .from(reschedulerCandidateCalls)
-    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
-    .where(eq(reschedulerCandidateCalls.id, candidateId))
-    .limit(1);
-
-  if (!candidate?.offerId) {
-    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
-  }
-
-  if (candidate.responseDeadlineAt && new Date(candidate.responseDeadlineAt) <= new Date()) {
-    throw Object.assign(new Error("This reschedule invitation has expired."), { status: 410 });
-  }
-
-  return completeAcceptedReschedulerOffer(candidate.clientId, candidate.offerId, {
-    selectedAppointmentId,
-    payload,
-    candidateWindow: PUBLIC_RESCHEDULE_CHOICES,
-    allowedOfferStatuses: ["calling", "pending", "whatsapp_sent", "call_no_answer"]
-  });
-}
-
-export async function declineReschedulerOfferPublic(candidateId, { payload = null } = {}) {
-  const [candidate] = await db
-    .select({
-      clientId: reschedulerCandidateCalls.clientId,
-      offerId: reschedulerCandidateCalls.waitlistOfferId,
-      responseDeadlineAt: waitlistOffers.responseDeadlineAt,
-      status: waitlistOffers.status
-    })
-    .from(reschedulerCandidateCalls)
-    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
-    .where(eq(reschedulerCandidateCalls.id, candidateId))
-    .limit(1);
-
-  if (!candidate?.offerId) {
-    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
-  }
-
-  assertPublicOfferAvailability({
-    flowState: null,
-    responseDeadlineAt: candidate.responseDeadlineAt,
-    status: candidate.status
-  });
-
-  const result = await finalizePublicOfferDecline(candidate, {
-    updateOfferStatus: () => db
-      .update(waitlistOffers)
-      .set({ status: "declined", updatedAt: new Date() })
-      .where(and(
-        eq(waitlistOffers.clientId, candidate.clientId),
-        eq(waitlistOffers.id, candidate.offerId),
-        inArray(waitlistOffers.status, ["calling", "pending", "whatsapp_sent", "call_no_answer"])
-      )),
-    syncOfferOutcome: syncReschedulerOfferOutcome,
-    advanceOffer: advanceOfferCycle,
-    recordNextCandidate: recordCandidateForOffer
-  });
-
-  return { ...result, payload };
 }
 
 export async function completeAcceptedReschedulerOfferPublic(
