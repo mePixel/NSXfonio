@@ -299,13 +299,16 @@ Request body:
 
 ```json
 {
-  "offerId": "{{offerId}}",
+  "slotId": "{{slotId}}",
+  "patientId": "{{patientId}}",
   "selectedAppointmentId": "<required when the patient has multiple upcoming appointments>",
   "callId": "{{callId}}",
   "summary": "Patient accepted the earlier appointment.",
   "formattedPlainTranscript": "<optional transcript>"
 }
 ```
+
+`offerId` is optional legacy context. The booking operation is driven by the offered slot and patient/customer identity, so the agent must not invent or reuse an offer id.
 
 Response:
 
