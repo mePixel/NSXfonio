@@ -50,6 +50,13 @@
       "when": 1780836000000,
       "tag": "0006_create_rescheduler",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780836001000,
+      "tag": "0007_add_email_communication_channel",
+      "breakpoints": true
     }
   ]
 }

@@ -307,6 +307,8 @@ Request body:
 }
 ```
 
+`slotId` and `patientId` are optional legacy context. The booking operation should be driven by the exact `offerId` from the current call context. The agent must not invent or reuse an offer id or slot id from any previous call.
+
 Response:
 
 ```json

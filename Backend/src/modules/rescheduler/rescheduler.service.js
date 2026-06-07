@@ -18,7 +18,8 @@ import { getReschedulerCandidateWindow } from "../settings/settings.service.js";
 import { advanceOfferCycle, autoStartOfferCycle } from "../waitlist/offers.service.js";
 import { deleteWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
-const ACTIVE_FLOW_STATES = ["pending", "calling", "failed"];
+const ACTIVE_FLOW_STATES = ["pending", "calling"];
+const ACTIVE_OFFER_STATUSES = ["pending", "calling", "whatsapp_sent"];
 const PUBLIC_RESCHEDULE_CHOICES = 3;
 const replacementCustomers = alias(customers, "replacement_customers");
 
@@ -84,7 +85,7 @@ export async function finalizePublicOfferDecline(
 function getFlowStateFromOfferResult(result) {
   if (!result) return "pending";
   if (result.started) return "calling";
-  if (result.status === "failed") return "failed";
+  if (result.status === "failed" || result.status === "skipped") return "failed";
   return "pending";
 }
 
@@ -239,6 +240,7 @@ export async function recordCancellationFlow(clientId, appointment, offerResult,
       originalSlotId: appointment.slotId ?? null,
       state,
       startedAt: state === "calling" || state === "failed" ? now : null,
+      completedAt: state === "failed" ? now : null,
       updatedAt: now
     })
     .onConflictDoUpdate({
@@ -249,7 +251,7 @@ export async function recordCancellationFlow(clientId, appointment, offerResult,
         replacementAppointmentId: null,
         replacementCustomerId: null,
         startedAt: state === "calling" || state === "failed" ? now : null,
-        completedAt: null,
+        completedAt: state === "failed" ? now : null,
         abortedAt: null,
         updatedAt: now
       }
@@ -409,6 +411,396 @@ export async function syncReschedulerOfferOutcome(clientId, offerId) {
   return { candidateId: candidate.id, state };
 }
 
+export async function markReschedulerFlowExhausted(clientId, offerId, { userId = null } = {}) {
+  const [offer] = await db
+    .select({ id: waitlistOffers.id, slotId: waitlistOffers.slotId, status: waitlistOffers.status })
+    .from(waitlistOffers)
+    .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.id, offerId)))
+    .limit(1);
+
+  if (!offer) return null;
+
+  const [flow] = await db
+    .select()
+    .from(reschedulerFlows)
+    .where(and(
+      eq(reschedulerFlows.clientId, clientId),
+      eq(reschedulerFlows.originalSlotId, offer.slotId),
+      inArray(reschedulerFlows.state, ACTIVE_FLOW_STATES)
+    ))
+    .orderBy(desc(reschedulerFlows.createdAt))
+    .limit(1);
+
+  if (!flow) return null;
+
+  const now = new Date();
+  const [updated] = await db
+    .update(reschedulerFlows)
+    .set({
+      state: "failed",
+      completedAt: now,
+      updatedAt: now
+    })
+    .where(and(eq(reschedulerFlows.clientId, clientId), eq(reschedulerFlows.id, flow.id)))
+    .returning();
+
+  if (updated) {
+    await writeAuditLog({
+      clientId,
+      userId,
+      appointmentId: flow.cancelledAppointmentId,
+      entityType: "rescheduler_flow",
+      entityId: flow.id,
+      action: "rescheduler_not_responded",
+      fromState: flow.state,
+      toState: "failed",
+      metadataJson: JSON.stringify({
+        finalOfferId: offer.id,
+        finalOfferStatus: offer.status,
+        outcome: "No rescheduler candidate accepted before the waitlist was exhausted."
+      })
+    });
+  }
+
+  return updated;
+}
+
+function extractSelectedAppointmentId(payload) {
+  return payload?.selectedAppointmentId
+    ?? payload?.cancellation?.appointmentId
+    ?? payload?.appointmentId
+    ?? payload?.appointment?.id
+    ?? payload?.selectedAppointment?.id
+    ?? payload?.reschedule?.appointmentToCancelId
+    ?? null;
+}
+
+async function getAppointmentToReplace(clientId, customerId, selectedAppointmentId) {
+  const candidateWindow = await getReschedulerCandidateWindow();
+  const upcomingAppointments = (await listUpcomingAppointmentsForCustomer(clientId, customerId))
+    .slice(0, candidateWindow);
+
+  if (selectedAppointmentId) {
+    const appointment = upcomingAppointments.find((item) => item.id === selectedAppointmentId) ?? null;
+    if (!appointment) {
+      throw Object.assign(new Error("Selected appointment is not an upcoming appointment for this customer"), {
+        status: 422
+      });
+    }
+    return appointment;
+  }
+
+  if (upcomingAppointments.length === 1) {
+    return upcomingAppointments[0];
+  }
+
+  if (upcomingAppointments.length > 1) {
+    throw Object.assign(
+      new Error("Customer has multiple upcoming appointments. The call must specify which appointment to cancel."),
+      { status: 422 }
+    );
+  }
+
+  return null;
+}
+
+function serializeAcceptResult(result) {
+  return {
+    handled: true,
+    mode: "rescheduler_accept",
+    alreadyFilled: Boolean(result.alreadyFilled),
+    appointmentId: result.replacementAppointment.id,
+    replacementAppointmentId: result.replacementAppointment.id,
+    cancelledAppointmentId: result.cancelledAppointmentId,
+    customerId: result.replacementAppointment.customerId ?? null,
+    slotId: result.replacementAppointment.slotId ?? null,
+    startsAt: result.replacementAppointment.startsAt ?? null,
+    endsAt: result.replacementAppointment.endsAt ?? null,
+    nextOfferResult: result.nextOfferResult
+  };
+}
+
+export async function completeReschedulerSlotBooking(
+  clientId,
+  { slotId, customerId, selectedAppointmentId = null, userId = null, payload = null } = {}
+) {
+  const [slot] = await db
+    .select()
+    .from(slots)
+    .where(and(eq(slots.clientId, clientId), eq(slots.id, slotId)))
+    .limit(1);
+
+  if (!slot) {
+    throw Object.assign(new Error("Slot not found"), { status: 404 });
+  }
+
+  const [flow] = await db
+    .select()
+    .from(reschedulerFlows)
+    .where(and(
+      eq(reschedulerFlows.clientId, clientId),
+      eq(reschedulerFlows.originalSlotId, slot.id)
+    ))
+    .orderBy(desc(reschedulerFlows.createdAt))
+    .limit(1);
+
+  if (flow?.state === "filled" && flow.replacementAppointmentId) {
+    const [replacementAppointment] = await db
+      .select()
+      .from(appointments)
+      .where(and(
+        eq(appointments.clientId, clientId),
+        eq(appointments.id, flow.replacementAppointmentId)
+      ))
+      .limit(1);
+
+    return {
+      offerId: null,
+      replacementAppointment: replacementAppointment ?? { id: flow.replacementAppointmentId },
+      cancelledAppointmentId: flow.cancelledAppointmentId,
+      nextOfferResult: null,
+      alreadyFilled: true
+    };
+  }
+
+  if (flow?.state === "aborted") {
+    throw Object.assign(new Error("This rebooking procedure has been aborted."), { status: 422 });
+  }
+
+  const [matchingOffer] = await db
+    .select({
+      id: waitlistOffers.id,
+      waitingListEntryId: waitlistOffers.waitingListEntryId,
+      customerId: waitingListEntries.customerId
+    })
+    .from(waitlistOffers)
+    .innerJoin(waitingListEntries, eq(waitlistOffers.waitingListEntryId, waitingListEntries.id))
+    .where(and(
+      eq(waitlistOffers.clientId, clientId),
+      eq(waitlistOffers.slotId, slot.id),
+      inArray(waitlistOffers.status, ["calling", "pending", "whatsapp_sent"])
+    ))
+    .orderBy(desc(waitlistOffers.createdAt))
+    .limit(1);
+
+  const resolvedCustomerId = matchingOffer?.customerId ?? customerId ?? null;
+  if (!resolvedCustomerId) {
+    throw Object.assign(new Error("Patient/customer id is required when no active offer exists for the slot."), {
+      status: 400
+    });
+  }
+
+  if (customerId && matchingOffer?.customerId && customerId !== matchingOffer.customerId) {
+    console.warn("[rescheduler accept] customerId mismatch; using active slot offer customer", {
+      slotId: slot.id,
+      activeOfferId: matchingOffer.id,
+      activeOfferCustomerId: matchingOffer.customerId,
+      requestedCustomerId: customerId
+    });
+  }
+
+  if (slot.status !== "available") {
+    throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
+  }
+
+  const appointmentToReplace = await getAppointmentToReplace(clientId, resolvedCustomerId, selectedAppointmentId);
+  if (!appointmentToReplace) {
+    throw Object.assign(new Error("Customer has no upcoming appointment to replace."), { status: 422 });
+  }
+
+  const now = new Date();
+  let releasedAppointment = null;
+  let nextOfferResult = null;
+
+  const { replacementAppointment } = await db.transaction(async (tx) => {
+    const [createdAppointment] = await tx
+      .insert(appointments)
+      .values({
+        id: randomUUID(),
+        clientId,
+        customerId: resolvedCustomerId,
+        slotId: slot.id,
+        title: appointmentToReplace?.title ?? "Waitlist rescheduled appointment",
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        notes: appointmentToReplace?.notes
+          ? `${appointmentToReplace.notes}\n\nMoved into earlier slot via Fonio rescheduler call.`
+          : "Moved into earlier slot via Fonio rescheduler call."
+      })
+      .returning();
+
+    const bookedSlots = await tx
+      .update(slots)
+      .set({ status: "booked", appointmentId: createdAppointment.id, updatedAt: now })
+      .where(and(
+        eq(slots.clientId, clientId),
+        eq(slots.id, slot.id),
+        eq(slots.status, "available")
+      ))
+      .returning({ id: slots.id });
+
+    if (bookedSlots.length === 0) {
+      throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
+    }
+
+    await writeAuditLog(
+      {
+        clientId,
+        userId,
+        appointmentId: createdAppointment.id,
+        entityType: "appointment",
+        entityId: createdAppointment.id,
+        action: "created",
+        toState: createdAppointment.status
+      },
+      tx
+    );
+
+    if (appointmentToReplace) {
+      const [cancelledAppointment] = await tx
+        .update(appointments)
+        .set({
+          status: "cancelled",
+          cancelReason: "Rescheduled into earlier slot via Fonio rescheduler call",
+          updatedAt: now
+        })
+        .where(and(
+          eq(appointments.clientId, clientId),
+          eq(appointments.id, appointmentToReplace.id)
+        ))
+        .returning();
+
+      if (!cancelledAppointment) {
+        throw Object.assign(new Error("Appointment selected for cancellation could not be updated"), { status: 409 });
+      }
+
+      if (appointmentToReplace.slotId) {
+        await tx
+          .update(slots)
+          .set({ status: "available", appointmentId: null, updatedAt: now })
+          .where(and(eq(slots.clientId, clientId), eq(slots.id, appointmentToReplace.slotId)));
+      }
+
+      await writeAuditLog(
+        {
+          clientId,
+          userId,
+          appointmentId: cancelledAppointment.id,
+          entityType: "appointment",
+          entityId: cancelledAppointment.id,
+          action: "status_changed",
+          fromState: appointmentToReplace.status,
+          toState: "cancelled",
+          reason: cancelledAppointment.cancelReason
+        },
+        tx
+      );
+
+      releasedAppointment = cancelledAppointment;
+    }
+
+    if (matchingOffer) {
+      await tx
+        .update(waitlistOffers)
+        .set({ status: "accepted", updatedAt: now })
+        .where(eq(waitlistOffers.id, matchingOffer.id));
+    }
+
+    const candidateUpdateWhere = matchingOffer
+      ? and(
+        eq(reschedulerCandidateCalls.clientId, clientId),
+        eq(reschedulerCandidateCalls.waitlistOfferId, matchingOffer.id)
+      )
+      : flow
+        ? and(
+          eq(reschedulerCandidateCalls.clientId, clientId),
+          eq(reschedulerCandidateCalls.reschedulerFlowId, flow.id),
+          eq(reschedulerCandidateCalls.customerId, resolvedCustomerId)
+        )
+        : null;
+
+    if (candidateUpdateWhere) {
+      await tx
+        .update(reschedulerCandidateCalls)
+        .set({
+          state: "accepted",
+          notes: payload?.summary ?? payload?.formattedPlainTranscript ?? payload?.formattedTranscript ?? null,
+          updatedAt: now
+        })
+        .where(candidateUpdateWhere);
+    }
+
+    const [filledFlow] = await tx
+      .update(reschedulerFlows)
+      .set({
+        state: "filled",
+        replacementAppointmentId: createdAppointment.id,
+        replacementCustomerId: resolvedCustomerId,
+        completedAt: now,
+        updatedAt: now
+      })
+      .where(and(
+        eq(reschedulerFlows.clientId, clientId),
+        eq(reschedulerFlows.originalSlotId, slot.id),
+        inArray(reschedulerFlows.state, ACTIVE_FLOW_STATES)
+      ))
+      .returning();
+
+    if (filledFlow) {
+      await writeAuditLog(
+        {
+          clientId,
+          userId,
+          appointmentId: filledFlow.cancelledAppointmentId,
+          entityType: "rescheduler_flow",
+          entityId: filledFlow.id,
+          action: "rescheduler_filled",
+          fromState: flow?.state ?? null,
+          toState: "filled",
+          metadataJson: {
+            offerId: matchingOffer?.id ?? null,
+            slotId: slot.id,
+            customerId: resolvedCustomerId,
+            selectedAppointmentId: appointmentToReplace?.id ?? null,
+            replacementAppointmentId: createdAppointment.id
+          }
+        },
+        tx
+      );
+    }
+
+    await tx.insert(communicationLogs).values({
+      id: randomUUID(),
+      clientId,
+      appointmentId: createdAppointment.id,
+      customerId: resolvedCustomerId,
+      waitlistOfferId: matchingOffer?.id ?? null,
+      channel: "call",
+      direction: "outbound",
+      eventType: "rescheduler_call_accepted_and_rescheduled",
+      status: "processed",
+      externalCallId: payload?.callId ?? payload?.id ?? null,
+      payloadJson: payload ? JSON.stringify(payload) : null
+    });
+
+    return { replacementAppointment: createdAppointment };
+  });
+
+  await deleteWaitlistEntryByCustomer(clientId, resolvedCustomerId);
+
+  if (releasedAppointment?.slotId) {
+    nextOfferResult = await autoStartOfferCycle(clientId, releasedAppointment.slotId, { userId });
+    await recordCancellationFlow(clientId, releasedAppointment, nextOfferResult, { userId });
+  }
+
+  return {
+    offerId: matchingOffer?.id ?? null,
+    replacementAppointment,
+    cancelledAppointmentId: releasedAppointment?.id ?? appointmentToReplace?.id ?? null,
+    nextOfferResult
+  };
+}
+
 export async function completeAcceptedReschedulerOffer(
   clientId,
   offerId,
@@ -482,10 +874,12 @@ export async function completeAcceptedReschedulerOffer(
     throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
   }
 
+
+  const candidateWindow = await getReschedulerCandidateWindow();
   const resolvedCandidateWindow = candidateWindow ?? await getReschedulerCandidateWindow();
   const upcomingAppointments = (await listUpcomingAppointmentsForCustomer(clientId, offer.customerId))
     .slice(0, resolvedCandidateWindow);
-  let appointmentToReplace = null;
+  let appointmentToReplace = await getAppointmentToReplace(clientId, offer.customerId, selectedAppointmentId);
 
   if (selectedAppointmentId) {
     appointmentToReplace = upcomingAppointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
@@ -692,30 +1086,135 @@ export async function completeAcceptedReschedulerOffer(
 
 export async function acceptReschedulerOffer(clientId, offerId, { payload = {}, userId = null } = {}) {
   const result = await completeAcceptedReschedulerOffer(clientId, offerId, {
-    selectedAppointmentId: payload?.selectedAppointmentId
-      ?? payload?.cancellation?.appointmentId
-      ?? payload?.appointmentId
-      ?? payload?.appointment?.id
-      ?? payload?.selectedAppointment?.id
-      ?? payload?.reschedule?.appointmentToCancelId
-      ?? null,
+    selectedAppointmentId: extractSelectedAppointmentId(payload),
     payload,
     userId
   });
 
-  return {
-    handled: true,
-    mode: "rescheduler_accept",
-    alreadyFilled: Boolean(result.alreadyFilled),
-    appointmentId: result.replacementAppointment.id,
-    replacementAppointmentId: result.replacementAppointment.id,
-    cancelledAppointmentId: result.cancelledAppointmentId,
-    customerId: result.replacementAppointment.customerId ?? null,
-    slotId: result.replacementAppointment.slotId ?? null,
-    startsAt: result.replacementAppointment.startsAt ?? null,
-    endsAt: result.replacementAppointment.endsAt ?? null,
-    nextOfferResult: result.nextOfferResult
-  };
+  return serializeAcceptResult(result);
+}
+
+export async function acceptCurrentReschedulerOffer(clientId, { payload = {}, userId = null } = {}) {
+  const activeOffers = await db
+    .select({
+      id: waitlistOffers.id
+    })
+    .from(waitlistOffers)
+    .innerJoin(reschedulerFlows, and(
+      eq(reschedulerFlows.clientId, waitlistOffers.clientId),
+      eq(reschedulerFlows.originalSlotId, waitlistOffers.slotId)
+    ))
+    .where(and(
+      eq(waitlistOffers.clientId, clientId),
+      inArray(waitlistOffers.status, ACTIVE_OFFER_STATUSES),
+      inArray(reschedulerFlows.state, ACTIVE_FLOW_STATES)
+    ))
+    .orderBy(desc(waitlistOffers.createdAt))
+    .limit(2);
+
+  if (activeOffers.length === 0) {
+    throw Object.assign(new Error("Offer not found"), { status: 404 });
+  }
+
+  if (activeOffers.length > 1) {
+    throw Object.assign(
+      new Error("Multiple active rescheduler offers exist; offerId or slotId is required."),
+      { status: 409 }
+    );
+  }
+
+  console.warn("[rescheduler accept] accepting only active offer because supplied offerId was not found", {
+    activeOfferId: activeOffers[0].id,
+    requestedOfferId: payload?.offerId ?? null
+  });
+
+  return acceptReschedulerOffer(clientId, activeOffers[0].id, { payload, userId });
+}
+
+export async function acceptReschedulerSlotBooking(
+  clientId,
+  { slotId, customerId, payload = {}, userId = null } = {}
+) {
+  const result = await completeReschedulerSlotBooking(clientId, {
+    slotId,
+    customerId,
+    selectedAppointmentId: extractSelectedAppointmentId(payload),
+    payload,
+    userId
+  });
+
+  return serializeAcceptResult(result);
+}
+
+export async function completeAcceptedReschedulerOfferPublic(
+  candidateId,
+  { selectedAppointmentId = null, payload = null } = {}
+) {
+  const [candidate] = await db
+    .select({
+      clientId: reschedulerCandidateCalls.clientId,
+      offerId: reschedulerCandidateCalls.waitlistOfferId,
+      responseDeadlineAt: waitlistOffers.responseDeadlineAt
+    })
+    .from(reschedulerCandidateCalls)
+    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
+    .where(eq(reschedulerCandidateCalls.id, candidateId))
+    .limit(1);
+
+  if (!candidate?.offerId) {
+    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
+  }
+
+  if (candidate.responseDeadlineAt && new Date(candidate.responseDeadlineAt) <= new Date()) {
+    throw Object.assign(new Error("This reschedule invitation has expired."), { status: 410 });
+  }
+
+  return completeAcceptedReschedulerOffer(candidate.clientId, candidate.offerId, {
+    selectedAppointmentId,
+    payload,
+    candidateWindow: PUBLIC_RESCHEDULE_CHOICES,
+    allowedOfferStatuses: ["calling", "pending", "whatsapp_sent", "call_no_answer"]
+  });
+}
+
+export async function declineReschedulerOfferPublic(candidateId, { payload = null } = {}) {
+  const [candidate] = await db
+    .select({
+      clientId: reschedulerCandidateCalls.clientId,
+      offerId: reschedulerCandidateCalls.waitlistOfferId,
+      responseDeadlineAt: waitlistOffers.responseDeadlineAt,
+      status: waitlistOffers.status
+    })
+    .from(reschedulerCandidateCalls)
+    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
+    .where(eq(reschedulerCandidateCalls.id, candidateId))
+    .limit(1);
+
+  if (!candidate?.offerId) {
+    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
+  }
+
+  assertPublicOfferAvailability({
+    flowState: null,
+    responseDeadlineAt: candidate.responseDeadlineAt,
+    status: candidate.status
+  });
+
+  const result = await finalizePublicOfferDecline(candidate, {
+    updateOfferStatus: () => db
+      .update(waitlistOffers)
+      .set({ status: "declined", updatedAt: new Date() })
+      .where(and(
+        eq(waitlistOffers.clientId, candidate.clientId),
+        eq(waitlistOffers.id, candidate.offerId),
+        inArray(waitlistOffers.status, ["calling", "pending", "whatsapp_sent", "call_no_answer"])
+      )),
+    syncOfferOutcome: syncReschedulerOfferOutcome,
+    advanceOffer: advanceOfferCycle,
+    recordNextCandidate: recordCandidateForOffer
+  });
+
+  return { ...result, payload };
 }
 
 export async function completeAcceptedReschedulerOfferPublic(
@@ -817,6 +1316,30 @@ async function syncCandidatesFromOffers(clientId, flow) {
   }
 }
 
+async function markFlowFailedIfNoActiveOffersRemain(clientId, flow) {
+  if (!flow.originalSlotId) return;
+  if (!isActiveFlowState(flow.state)) return;
+
+  const offers = await db
+    .select({ status: waitlistOffers.status })
+    .from(waitlistOffers)
+    .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.slotId, flow.originalSlotId)));
+
+  const hasAcceptedOffer = offers.some((offer) => offer.status === "accepted");
+  const hasActiveOffer = offers.some((offer) => ACTIVE_OFFER_STATUSES.includes(offer.status));
+  if (hasAcceptedOffer || hasActiveOffer) return;
+
+  const now = new Date();
+  await db
+    .update(reschedulerFlows)
+    .set({
+      state: "failed",
+      completedAt: now,
+      updatedAt: now
+    })
+    .where(and(eq(reschedulerFlows.clientId, clientId), eq(reschedulerFlows.id, flow.id)));
+}
+
 export async function listReschedulerFlows(clientId) {
   const flowRows = await db
     .select()
@@ -826,6 +1349,7 @@ export async function listReschedulerFlows(clientId) {
 
   for (const flow of flowRows) {
     await syncCandidatesFromOffers(clientId, flow);
+    await markFlowFailedIfNoActiveOffersRemain(clientId, flow);
   }
 
   const rows = await db

@@ -11,6 +11,7 @@ import {
 } from "../../db/schema.js";
 import {
   completeAcceptedReschedulerOffer,
+  markReschedulerFlowExhausted,
   recordCandidateForOffer,
   syncReschedulerOfferOutcome
 } from "../rescheduler/rescheduler.service.js";
@@ -207,6 +208,20 @@ async function handleOutboundWebhook(payload) {
     }
 
     await moveWaitlistEntryToEnd(offer.clientId, offer.waitingListEntryId);
+    let advanced = { nextOffer: null };
+    try {
+      advanced = await advanceOfferCycle(offer.clientId, offerId);
+      if (advanced.nextOffer?.id) {
+        await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+      } else {
+        await markReschedulerFlowExhausted(offer.clientId, offerId);
+      }
+    } catch (error) {
+      console.error("[fonio webhook] failed to advance waitlist offer after no answer", {
+        offerId,
+        error: error?.message ?? error
+      });
+    }
     return {
       handled: true,
       mode: "outbound",
@@ -229,6 +244,8 @@ async function handleOutboundWebhook(payload) {
       const advanced = await advanceOfferCycle(offer.clientId, offerId);
       if (advanced.nextOffer?.id) {
         await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+      } else {
+        await markReschedulerFlowExhausted(offer.clientId, offerId);
       }
       return { handled: true, mode: "outbound", outcome: "declined", offerId };
     }

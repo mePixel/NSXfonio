@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { requireFonioApiKey } from "../../lib/middleware.js";
 import { isoDate, str } from "../../lib/sanitize.js";
-import { acceptReschedulerOffer } from "../rescheduler/rescheduler.service.js";
+import {
+  acceptCurrentReschedulerOffer,
+  acceptReschedulerOffer,
+  acceptReschedulerSlotBooking
+} from "../rescheduler/rescheduler.service.js";
 import {
   buildInboundContext,
   handleInboundAppointmentWebhook,
@@ -15,6 +19,83 @@ import {
 export const fonioRouter = Router();
 
 fonioRouter.use(requireFonioApiKey);
+
+function getReschedulerAcceptOfferId(payload) {
+  const contextOfferId = payload?.context?.offerId;
+  const nestedOfferId = payload?.reschedulerAccept?.offerId;
+  const topLevelOfferId = payload?.offerId;
+
+  if (typeof contextOfferId === "string" && contextOfferId.trim()) {
+    if (
+      typeof topLevelOfferId === "string"
+      && topLevelOfferId.trim()
+      && topLevelOfferId !== contextOfferId
+    ) {
+      console.warn("[fonio rescheduler accept] offerId mismatch; using call context offerId", {
+        contextOfferId,
+        topLevelOfferId
+      });
+    }
+
+    return contextOfferId;
+  }
+
+  if (typeof nestedOfferId === "string" && nestedOfferId.trim()) {
+    if (
+      typeof topLevelOfferId === "string"
+      && topLevelOfferId.trim()
+      && topLevelOfferId !== nestedOfferId
+    ) {
+      console.warn("[fonio rescheduler accept] offerId mismatch; using nested reschedulerAccept offerId", {
+        nestedOfferId,
+        topLevelOfferId
+      });
+    }
+
+    return nestedOfferId;
+  }
+
+  return typeof topLevelOfferId === "string" && topLevelOfferId.trim()
+    ? topLevelOfferId
+    : null;
+}
+
+function getReschedulerAcceptSlotBooking(payload) {
+  const context = payload?.context ?? {};
+  const contextSlotId = context?.slotId;
+  const topLevelSlotId = payload?.slotId;
+  const customerId = context?.patientId
+    ?? context?.customerId
+    ?? context?.patient?.id
+    ?? context?.customer?.id
+    ?? payload?.patientId
+    ?? payload?.customerId
+    ?? payload?.patient?.id
+    ?? payload?.customer?.id
+    ?? null;
+
+  if (
+    typeof contextSlotId === "string"
+    && contextSlotId.trim()
+    && typeof topLevelSlotId === "string"
+    && topLevelSlotId.trim()
+    && topLevelSlotId !== contextSlotId
+  ) {
+    console.warn("[fonio rescheduler accept] slotId mismatch; using call context slotId", {
+      contextSlotId,
+      topLevelSlotId
+    });
+  }
+
+  const slotId = typeof contextSlotId === "string" && contextSlotId.trim()
+    ? contextSlotId
+    : topLevelSlotId;
+
+  return {
+    slotId: typeof slotId === "string" && slotId.trim() ? slotId : null,
+    customerId: typeof customerId === "string" && customerId.trim() ? customerId : null
+  };
+}
 
 fonioRouter.post("/inbound-context", async (req, res, next) => {
   try {
@@ -155,22 +236,47 @@ fonioRouter.post("/inbound-waitlist", async (req, res, next) => {
 
 fonioRouter.post("/rescheduler/accept", async (req, res, next) => {
   try {
-    const offerId = req.body?.offerId ?? req.body?.context?.offerId ?? null;
+    const offerId = getReschedulerAcceptOfferId(req.body);
 
-    if (!offerId || typeof offerId !== "string") {
-      res.status(400).json({
-        handled: false,
-        reason: "missing_offer_id",
-        error: "offerId is required"
-      });
+    if (offerId) {
+      let result;
+
+      try {
+        result = await acceptReschedulerOffer(req.fonioAuth.clientId, offerId, {
+          payload: req.body ?? {}
+        });
+      } catch (error) {
+        if (error?.status !== 404) {
+          throw error;
+        }
+
+        result = await acceptCurrentReschedulerOffer(req.fonioAuth.clientId, {
+          payload: req.body ?? {}
+        });
+      }
+
+      res.status(result.alreadyFilled ? 200 : 201).json(result);
       return;
     }
 
-    const result = await acceptReschedulerOffer(req.fonioAuth.clientId, offerId, {
-      payload: req.body ?? {}
-    });
+    const slotBooking = getReschedulerAcceptSlotBooking(req.body);
 
-    res.status(result.alreadyFilled ? 200 : 201).json(result);
+    if (slotBooking.slotId) {
+      const result = await acceptReschedulerSlotBooking(req.fonioAuth.clientId, {
+        slotId: slotBooking.slotId,
+        customerId: slotBooking.customerId,
+        payload: req.body ?? {}
+      });
+
+      res.status(result.alreadyFilled ? 200 : 201).json(result);
+      return;
+    }
+
+    res.status(400).json({
+      handled: false,
+      reason: "missing_rescheduler_booking_context",
+      error: "offerId or slotId is required"
+    });
   } catch (error) {
     next(error);
   }

@@ -11,7 +11,7 @@ import { getSlot } from "../slots/slots.service.js";
 const ACTIVE_STATUSES = ["pending", "calling", "call_no_answer", "whatsapp_sent"];
 const INLINE_EXPIRY_STATUSES = ["pending", "whatsapp_sent"];
 const CANCELLED_SLOT_OPENING_PROMPT =
-  "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept.";
+  "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept. If the patient accepts, call the Rescheduler API with the exact offerId from this call context.";
 
 function formatCallDateTime(value) {
   const date = value instanceof Date ? value : new Date(value);
@@ -207,6 +207,11 @@ function buildCancelledSlotCallContext(slot, customer, offer) {
     slotEndLabel,
     appointmentLabel,
     offerId: offer.id,
+    reschedulerAccept: {
+      offerId: offer.id,
+      slotId: slot.id
+    },
+    apiInstruction: `If the patient clearly accepts, call the Rescheduler API using offerId ${offer.id}. Do not use an offerId or slotId from any previous call.`,
     scenario: "cancelled_slot_waitlist_offer",
     openingPrompt: CANCELLED_SLOT_OPENING_PROMPT,
     firstMessage: appointmentLabel
