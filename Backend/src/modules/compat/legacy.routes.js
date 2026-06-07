@@ -4,7 +4,11 @@ import { and, asc, eq, gte, inArray, lt, ne } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
 import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
-import { DEFAULT_RESCHEDULER_CANDIDATE_WINDOW, ensureAppointmentSettingsStorage } from "../settings/settings.service.js";
+import {
+  DEFAULT_EMAIL_RESPONSE_DEADLINE_MINUTES,
+  DEFAULT_RESCHEDULER_CANDIDATE_WINDOW,
+  ensureAppointmentSettingsStorage
+} from "../settings/settings.service.js";
 import { transitionStatus } from "../appointments/status.service.js";
 import { createWaitlistEntryForCustomer } from "../waitlist/waitlist.service.js";
 import { listWaitlistEntriesByCustomerIds } from "../waitlist/waitlist.service.js";
@@ -16,6 +20,8 @@ const DEFAULT_OFFICE_HOURS_START = "08:00";
 const DEFAULT_OFFICE_HOURS_END = "17:00";
 const MIN_RESCHEDULER_CANDIDATE_WINDOW = 1;
 const MAX_RESCHEDULER_CANDIDATE_WINDOW = 10;
+const MIN_EMAIL_RESPONSE_DEADLINE_MINUTES = 1;
+const MAX_EMAIL_RESPONSE_DEADLINE_MINUTES = 10080;
 const SUPPORTED_TIME_SLOT_SIZES = new Set([15, 30, 60]);
 const SLOT_GENERATION_DAYS = 30;
 
@@ -131,6 +137,10 @@ function normalizeAppointmentSettings(row) {
       Number.isInteger(Number(row.rescheduler_candidate_window)) && Number(row.rescheduler_candidate_window) > 0
         ? Number(row.rescheduler_candidate_window)
         : DEFAULT_RESCHEDULER_CANDIDATE_WINDOW,
+    emailResponseDeadlineMinutes:
+      Number.isInteger(Number(row.email_response_deadline_minutes)) && Number(row.email_response_deadline_minutes) > 0
+        ? Number(row.email_response_deadline_minutes)
+        : DEFAULT_EMAIL_RESPONSE_DEADLINE_MINUTES,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -198,10 +208,11 @@ async function ensureAppointmentSettings() {
         "office_hours_start",
         "office_hours_end",
         "rescheduler_candidate_window",
+        "email_response_deadline_minutes",
         "created_at",
         "updated_at"
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
       ON CONFLICT ("id") DO NOTHING
     `,
     [
@@ -211,6 +222,7 @@ async function ensureAppointmentSettings() {
       DEFAULT_OFFICE_HOURS_START,
       DEFAULT_OFFICE_HOURS_END,
       DEFAULT_RESCHEDULER_CANDIDATE_WINDOW,
+      DEFAULT_EMAIL_RESPONSE_DEADLINE_MINUTES,
       now
     ]
   );
@@ -224,6 +236,7 @@ async function ensureAppointmentSettings() {
         "office_hours_start",
         "office_hours_end",
         "rescheduler_candidate_window",
+        "email_response_deadline_minutes",
         "created_at",
         "updated_at"
       FROM "appointment_settings"
@@ -422,6 +435,7 @@ function validateAppointmentSettingsPayload(body) {
   const officeHoursEnd =
     typeof body?.officeHoursEnd === "string" ? body.officeHoursEnd.trim() : "";
   const reschedulerCandidateWindow = Number(body?.reschedulerCandidateWindow);
+  const emailResponseDeadlineMinutes = Number(body?.emailResponseDeadlineMinutes);
   const startMinutes = timeSlotToMinutes(officeHoursStart);
   const endMinutes = timeSlotToMinutes(officeHoursEnd);
 
@@ -456,13 +470,22 @@ function validateAppointmentSettingsPayload(body) {
     errors.reschedulerCandidateWindow = `Choose between ${MIN_RESCHEDULER_CANDIDATE_WINDOW} and ${MAX_RESCHEDULER_CANDIDATE_WINDOW} appointments.`;
   }
 
+  if (
+    !Number.isInteger(emailResponseDeadlineMinutes)
+    || emailResponseDeadlineMinutes < MIN_EMAIL_RESPONSE_DEADLINE_MINUTES
+    || emailResponseDeadlineMinutes > MAX_EMAIL_RESPONSE_DEADLINE_MINUTES
+  ) {
+    errors.emailResponseDeadlineMinutes = "Choose a response time between 1 minute and 7 days.";
+  }
+
   return {
     values: {
       timeSlotSize,
       workingDays: uniqueWorkingDays,
       officeHoursStart,
       officeHoursEnd,
-      reschedulerCandidateWindow
+      reschedulerCandidateWindow,
+      emailResponseDeadlineMinutes
     },
     errors
   };
@@ -748,16 +771,18 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
           "office_hours_start",
           "office_hours_end",
           "rescheduler_candidate_window",
+          "email_response_deadline_minutes",
           "created_at",
           "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
         ON CONFLICT ("id") DO UPDATE SET
           "time_slot_size" = EXCLUDED."time_slot_size",
           "working_days" = EXCLUDED."working_days",
           "office_hours_start" = EXCLUDED."office_hours_start",
           "office_hours_end" = EXCLUDED."office_hours_end",
           "rescheduler_candidate_window" = EXCLUDED."rescheduler_candidate_window",
+          "email_response_deadline_minutes" = EXCLUDED."email_response_deadline_minutes",
           "updated_at" = EXCLUDED."updated_at"
         RETURNING
           "id",
@@ -766,6 +791,7 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
           "office_hours_start",
           "office_hours_end",
           "rescheduler_candidate_window",
+          "email_response_deadline_minutes",
           "created_at",
           "updated_at"
       `,
@@ -776,6 +802,7 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
         values.officeHoursStart,
         values.officeHoursEnd,
         values.reschedulerCandidateWindow,
+        values.emailResponseDeadlineMinutes,
         now
       ]
     );

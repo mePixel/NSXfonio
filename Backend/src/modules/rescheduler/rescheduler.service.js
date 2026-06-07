@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "../../db/index.js";
 import {
@@ -15,7 +15,7 @@ import {
 import { writeAuditLog } from "../audit/audit.service.js";
 import { listUpcomingAppointmentsForCustomer } from "../appointments/appointments.service.js";
 import { getReschedulerCandidateWindow } from "../settings/settings.service.js";
-import { autoStartOfferCycle } from "../waitlist/offers.service.js";
+import { advanceOfferCycle, autoStartOfferCycle } from "../waitlist/offers.service.js";
 import { deleteWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
 const ACTIVE_FLOW_STATES = ["pending", "calling", "failed"];
@@ -28,6 +28,57 @@ function mapOfferStatusToCandidateState(status) {
   if (status === "call_no_answer" || status === "timed_out") return "not_reached";
   if (status === "pending" || status === "calling" || status === "whatsapp_sent") return "interested";
   return "skipped";
+}
+
+function isPublicOfferStatus(status) {
+  return ["calling", "pending", "whatsapp_sent", "call_no_answer"].includes(status);
+}
+
+export function assertPublicOfferAvailability({
+  flowState,
+  responseDeadlineAt,
+  status
+}) {
+  if (flowState === "filled") {
+    throw Object.assign(new Error("This appointment has already been confirmed."), { status: 409 });
+  }
+
+  if (flowState === "aborted") {
+    throw Object.assign(new Error("This rebooking procedure has been aborted."), { status: 422 });
+  }
+
+  if (responseDeadlineAt && new Date(responseDeadlineAt) <= new Date()) {
+    throw Object.assign(new Error("This reschedule invitation has expired."), { status: 410 });
+  }
+
+  if (!isPublicOfferStatus(status)) {
+    throw Object.assign(new Error("This reschedule invitation is no longer active."), { status: 409 });
+  }
+}
+
+export async function finalizePublicOfferDecline(
+  candidate,
+  {
+    updateOfferStatus,
+    syncOfferOutcome,
+    advanceOffer,
+    recordNextCandidate
+  }
+) {
+  await updateOfferStatus();
+  await syncOfferOutcome(candidate.clientId, candidate.offerId);
+
+  const advanced = await advanceOffer(candidate.clientId, candidate.offerId);
+  if (advanced.nextOffer?.id) {
+    await recordNextCandidate(candidate.clientId, advanced.nextOffer.id);
+  }
+
+  return {
+    handled: true,
+    mode: "rescheduler_decline",
+    offerId: candidate.offerId,
+    nextOfferStarted: Boolean(advanced.nextOffer?.id)
+  };
 }
 
 function getFlowStateFromOfferResult(result) {
@@ -101,36 +152,40 @@ function serializePublicAppointment(appointment) {
   };
 }
 
-export async function getPublicOfferSummary(offerId) {
+export async function getPublicOfferSummary(candidateId) {
   const [offer] = await db
     .select({
-      id: waitlistOffers.id,
+      id: reschedulerCandidateCalls.id,
       status: waitlistOffers.status,
       responseDeadlineAt: waitlistOffers.responseDeadlineAt,
-      createdAt: waitlistOffers.createdAt,
-      clientId: waitlistOffers.clientId,
-      customerId: waitingListEntries.customerId,
-      slotId: waitlistOffers.slotId,
+      createdAt: reschedulerCandidateCalls.createdAt,
+      clientId: reschedulerCandidateCalls.clientId,
+      customerId: reschedulerCandidateCalls.customerId,
+      flowState: reschedulerFlows.state,
+      slotId: reschedulerFlows.originalSlotId,
       slotStartsAt: slots.startsAt,
       slotEndsAt: slots.endsAt,
       slotStatus: slots.status,
       customerFirstName: customers.firstName,
       customerLastName: customers.lastName
     })
-    .from(waitlistOffers)
-    .innerJoin(waitingListEntries, eq(waitlistOffers.waitingListEntryId, waitingListEntries.id))
-    .innerJoin(customers, eq(waitingListEntries.customerId, customers.id))
-    .innerJoin(slots, eq(waitlistOffers.slotId, slots.id))
-    .where(eq(waitlistOffers.id, offerId))
+    .from(reschedulerCandidateCalls)
+    .innerJoin(reschedulerFlows, eq(reschedulerCandidateCalls.reschedulerFlowId, reschedulerFlows.id))
+    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
+    .innerJoin(customers, eq(reschedulerCandidateCalls.customerId, customers.id))
+    .innerJoin(slots, eq(reschedulerFlows.originalSlotId, slots.id))
+    .where(eq(reschedulerCandidateCalls.id, candidateId))
     .limit(1);
 
   if (!offer) {
-    throw Object.assign(new Error("Offer not found"), { status: 404 });
+    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
   }
 
-  if (!["calling", "pending", "whatsapp_sent"].includes(offer.status)) {
-    throw Object.assign(new Error("This offer is no longer active."), { status: 422 });
-  }
+  assertPublicOfferAvailability({
+    flowState: offer.flowState,
+    responseDeadlineAt: offer.responseDeadlineAt,
+    status: offer.status
+  });
 
   if (offer.slotStatus !== "available") {
     throw Object.assign(new Error("This appointment is no longer available."), { status: 409 });
@@ -222,6 +277,18 @@ export async function recordCancellationFlow(clientId, appointment, offerResult,
 }
 
 export async function recordCandidateFromOffer(clientId, flowId, offerId) {
+  const [existingCandidate] = await db
+    .select()
+    .from(reschedulerCandidateCalls)
+    .where(and(
+      eq(reschedulerCandidateCalls.clientId, clientId),
+      eq(reschedulerCandidateCalls.reschedulerFlowId, flowId),
+      eq(reschedulerCandidateCalls.waitlistOfferId, offerId)
+    ))
+    .limit(1);
+
+  if (existingCandidate) return existingCandidate;
+
   const [offer] = await db
     .select({
       id: waitlistOffers.id,
@@ -345,7 +412,13 @@ export async function syncReschedulerOfferOutcome(clientId, offerId) {
 export async function completeAcceptedReschedulerOffer(
   clientId,
   offerId,
-  { selectedAppointmentId = null, userId = null, payload = null, candidateWindow = null } = {}
+  {
+    selectedAppointmentId = null,
+    userId = null,
+    payload = null,
+    candidateWindow = null,
+    allowedOfferStatuses = ["calling", "pending", "whatsapp_sent"]
+  } = {}
 ) {
   const [offer] = await db
     .select({
@@ -401,7 +474,7 @@ export async function completeAcceptedReschedulerOffer(
     throw Object.assign(new Error("This rebooking procedure has been aborted."), { status: 422 });
   }
 
-  if (!["calling", "pending", "whatsapp_sent"].includes(offer.status)) {
+  if (!allowedOfferStatuses.includes(offer.status)) {
     throw Object.assign(new Error(`Offer cannot be accepted from status '${offer.status}'`), { status: 422 });
   }
 
@@ -523,6 +596,16 @@ export async function completeAcceptedReschedulerOffer(
 
     await tx
       .update(waitlistOffers)
+      .set({ status: "timed_out", updatedAt: now })
+      .where(and(
+        eq(waitlistOffers.clientId, clientId),
+        eq(waitlistOffers.slotId, offer.slotId),
+        ne(waitlistOffers.id, offer.id),
+        inArray(waitlistOffers.status, ["pending", "calling", "call_no_answer", "whatsapp_sent"])
+      ));
+
+    await tx
+      .update(waitlistOffers)
       .set({ status: "accepted", updatedAt: now })
       .where(eq(waitlistOffers.id, offer.id));
 
@@ -636,27 +719,74 @@ export async function acceptReschedulerOffer(clientId, offerId, { payload = {}, 
 }
 
 export async function completeAcceptedReschedulerOfferPublic(
-  offerId,
+  candidateId,
   { selectedAppointmentId = null, payload = null } = {}
 ) {
-  const [offer] = await db
+  const [candidate] = await db
     .select({
-      id: waitlistOffers.id,
-      clientId: waitlistOffers.clientId
+      clientId: reschedulerCandidateCalls.clientId,
+      offerId: reschedulerCandidateCalls.waitlistOfferId,
+      responseDeadlineAt: waitlistOffers.responseDeadlineAt
     })
-    .from(waitlistOffers)
-    .where(eq(waitlistOffers.id, offerId))
+    .from(reschedulerCandidateCalls)
+    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
+    .where(eq(reschedulerCandidateCalls.id, candidateId))
     .limit(1);
 
-  if (!offer) {
-    throw Object.assign(new Error("Offer not found"), { status: 404 });
+  if (!candidate?.offerId) {
+    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
   }
 
-  return completeAcceptedReschedulerOffer(offer.clientId, offerId, {
+  if (candidate.responseDeadlineAt && new Date(candidate.responseDeadlineAt) <= new Date()) {
+    throw Object.assign(new Error("This reschedule invitation has expired."), { status: 410 });
+  }
+
+  return completeAcceptedReschedulerOffer(candidate.clientId, candidate.offerId, {
     selectedAppointmentId,
     payload,
-    candidateWindow: PUBLIC_RESCHEDULE_CHOICES
+    candidateWindow: PUBLIC_RESCHEDULE_CHOICES,
+    allowedOfferStatuses: ["calling", "pending", "whatsapp_sent", "call_no_answer"]
   });
+}
+
+export async function declineReschedulerOfferPublic(candidateId, { payload = null } = {}) {
+  const [candidate] = await db
+    .select({
+      clientId: reschedulerCandidateCalls.clientId,
+      offerId: reschedulerCandidateCalls.waitlistOfferId,
+      responseDeadlineAt: waitlistOffers.responseDeadlineAt,
+      status: waitlistOffers.status
+    })
+    .from(reschedulerCandidateCalls)
+    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
+    .where(eq(reschedulerCandidateCalls.id, candidateId))
+    .limit(1);
+
+  if (!candidate?.offerId) {
+    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
+  }
+
+  assertPublicOfferAvailability({
+    flowState: null,
+    responseDeadlineAt: candidate.responseDeadlineAt,
+    status: candidate.status
+  });
+
+  const result = await finalizePublicOfferDecline(candidate, {
+    updateOfferStatus: () => db
+      .update(waitlistOffers)
+      .set({ status: "declined", updatedAt: new Date() })
+      .where(and(
+        eq(waitlistOffers.clientId, candidate.clientId),
+        eq(waitlistOffers.id, candidate.offerId),
+        inArray(waitlistOffers.status, ["calling", "pending", "whatsapp_sent", "call_no_answer"])
+      )),
+    syncOfferOutcome: syncReschedulerOfferOutcome,
+    advanceOffer: advanceOfferCycle,
+    recordNextCandidate: recordCandidateForOffer
+  });
+
+  return { ...result, payload };
 }
 
 async function syncCandidatesFromOffers(clientId, flow) {

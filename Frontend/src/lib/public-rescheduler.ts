@@ -40,8 +40,8 @@ async function readApiError(response: Response) {
   }
 }
 
-export async function loadPublicRescheduleOffer(offerId: string) {
-  const response = await fetch(`${apiURL}/api/rescheduler/offers/${encodeURIComponent(offerId)}`);
+export async function loadPublicRescheduleOffer(candidateId: string) {
+  const response = await fetch(`${apiURL}/api/rescheduler/candidates/${encodeURIComponent(candidateId)}`);
 
   if (!response.ok) {
     throw new Response(await readApiError(response), {
@@ -53,11 +53,11 @@ export async function loadPublicRescheduleOffer(offerId: string) {
   return (await response.json()) as { offer: PublicRescheduleOffer };
 }
 
-export async function acceptPublicRescheduleOffer(offerId: string, formData: FormData) {
+export async function acceptPublicRescheduleOffer(candidateId: string, formData: FormData) {
   const selectedAppointmentId = String(formData.get("selectedAppointmentId") ?? "").trim();
 
   const response = await fetch(
-    `${apiURL}/api/rescheduler/offers/${encodeURIComponent(offerId)}/accept-public`,
+    `${apiURL}/api/rescheduler/candidates/${encodeURIComponent(candidateId)}/accept-public`,
     {
       method: "POST",
       headers: {
@@ -79,5 +79,26 @@ export async function acceptPublicRescheduleOffer(offerId: string, formData: For
   return {
     ok: true as const,
     message: "The earlier appointment has been confirmed and your selected appointment was cancelled.",
+  };
+}
+
+export async function declinePublicRescheduleOffer(candidateId: string) {
+  const response = await fetch(
+    `${apiURL}/api/rescheduler/candidates/${encodeURIComponent(candidateId)}/decline-public`,
+    {
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    return {
+      ok: false as const,
+      message: await readApiError(response),
+    };
+  }
+
+  return {
+    ok: true as const,
+    message: "This offer has been declined. If the slot is still open, the next patient is being contacted now.",
   };
 }

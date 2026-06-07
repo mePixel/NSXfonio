@@ -2,37 +2,41 @@ import { type ActionFunctionArgs, type LoaderFunctionArgs } from "react-router";
 
 import {
   acceptPublicRescheduleOffer,
+  declinePublicRescheduleOffer,
   loadPublicRescheduleOffer,
 } from "@/lib/public-rescheduler";
 
 export async function publicReschedulerLoader({ params }: LoaderFunctionArgs) {
-  const offerId = String(params.offerId ?? "").trim();
+  const candidateId = String(params.candidateId ?? "").trim();
 
-  if (!offerId) {
-    throw new Response("Missing offer id.", { status: 400 });
+  if (!candidateId) {
+    throw new Response("Missing candidate id.", { status: 400 });
   }
 
-  return loadPublicRescheduleOffer(offerId);
+  return loadPublicRescheduleOffer(candidateId);
 }
 
 export async function publicReschedulerAction({
   params,
   request,
 }: ActionFunctionArgs) {
-  const offerId = String(params.offerId ?? "").trim();
+  const candidateId = String(params.candidateId ?? "").trim();
 
-  if (!offerId) {
+  if (!candidateId) {
     return Response.json(
       {
         ok: false,
-        message: "Missing offer id.",
+        message: "Missing candidate id.",
       },
       { status: 400 },
     );
   }
 
   const formData = await request.formData();
-  const result = await acceptPublicRescheduleOffer(offerId, formData);
+  const intent = String(formData.get("intent") ?? "accept").trim();
+  const result = intent === "decline"
+    ? await declinePublicRescheduleOffer(candidateId)
+    : await acceptPublicRescheduleOffer(candidateId, formData);
 
   return Response.json(result, {
     status: result.ok ? 200 : 400,

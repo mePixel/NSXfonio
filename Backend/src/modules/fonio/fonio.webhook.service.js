@@ -1,15 +1,23 @@
 import { randomUUID } from "crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { webhookEvents, waitlistOffers, customers, waitingListEntries, communicationLogs } from "../../db/schema.js";
+import {
+  communicationLogs,
+  customers,
+  reschedulerCandidateCalls,
+  waitingListEntries,
+  webhookEvents,
+  waitlistOffers
+} from "../../db/schema.js";
 import {
   completeAcceptedReschedulerOffer,
   recordCandidateForOffer,
   syncReschedulerOfferOutcome
 } from "../rescheduler/rescheduler.service.js";
-import { advanceOfferCycle, moveWaitlistEntryToEnd } from "../waitlist/offers.service.js";
+import { moveWaitlistEntryToEnd } from "../waitlist/offers.service.js";
 import { handleInboundAppointmentWebhook, isInboundAppointmentWebhook } from "./fonio.inbound.service.js";
 import { sendNoAnswerFollowupEmail } from "../email/email.service.js";
+import { getEmailResponseDeadlineMinutes } from "../settings/settings.service.js";
 import { getSlot } from "../slots/slots.service.js";
 
 function extractWaitlistDecision(payload) {
@@ -98,7 +106,17 @@ async function sendNoAnswerEmailForOffer(offer) {
   if (!customer) return { sent: false, reason: "customer_not_found" };
 
   const slot = await getSlot(offer.clientId, offer.slotId);
-  const emailResult = await sendNoAnswerFollowupEmail(customer, offer, slot);
+  const [candidate] = await db
+    .select({ id: reschedulerCandidateCalls.id })
+    .from(reschedulerCandidateCalls)
+    .where(and(
+      eq(reschedulerCandidateCalls.clientId, offer.clientId),
+      eq(reschedulerCandidateCalls.waitlistOfferId, offer.id)
+    ))
+    .limit(1);
+  const emailResult = await sendNoAnswerFollowupEmail(customer, offer, slot, {
+    candidateId: candidate?.id ?? null
+  });
 
   await db.insert(communicationLogs).values({
     id: randomUUID(),
@@ -114,6 +132,17 @@ async function sendNoAnswerEmailForOffer(offer) {
   });
 
   return emailResult;
+}
+
+async function getResetResponseDeadline(offer) {
+  const configuredWindowMs = offer.responseDeadlineAt && offer.createdAt
+    ? new Date(offer.responseDeadlineAt).getTime() - new Date(offer.createdAt).getTime()
+    : NaN;
+  const windowMs = Number.isFinite(configuredWindowMs) && configuredWindowMs > 0
+    ? configuredWindowMs
+    : await getEmailResponseDeadlineMinutes() * 60 * 1000;
+
+  return new Date(Date.now() + windowMs);
 }
 
 async function handleOutboundWebhook(payload) {
@@ -154,39 +183,38 @@ async function handleOutboundWebhook(payload) {
   const answered = ["completed", "answered", "success"].includes(normalizedStatus);
 
   if (noAnswer) {
-    await db.update(waitlistOffers)
-      .set({ status: "call_no_answer", updatedAt: new Date() })
-      .where(eq(waitlistOffers.id, offerId));
+    const responseDeadlineAt = await getResetResponseDeadline(offer);
+    const [updatedOffer] = await db.update(waitlistOffers)
+      .set({ status: "call_no_answer", responseDeadlineAt, updatedAt: new Date() })
+      .where(and(
+        eq(waitlistOffers.id, offerId),
+        eq(waitlistOffers.status, "calling")
+      ))
+      .returning();
+
+    if (!updatedOffer) {
+      return { handled: false, mode: "outbound", reason: "offer_not_active" };
+    }
+
+    await syncReschedulerOfferOutcome(offer.clientId, offerId);
 
     let emailResult = { sent: false, reason: "not_attempted" };
     try {
-      emailResult = await sendNoAnswerEmailForOffer(offer);
+      emailResult = await sendNoAnswerEmailForOffer(updatedOffer);
     } catch (error) {
       console.error("[fonio webhook] Error sending follow-up email:", error);
       emailResult = { sent: false, reason: "send_or_log_failed", error: error?.message ?? String(error) };
     }
 
-    await syncReschedulerOfferOutcome(offer.clientId, offerId);
     await moveWaitlistEntryToEnd(offer.clientId, offer.waitingListEntryId);
-    let advanced = { nextOffer: null };
-    try {
-      advanced = await advanceOfferCycle(offer.clientId, offerId);
-      if (advanced.nextOffer?.id) {
-        await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
-      }
-    } catch (error) {
-      console.error("[fonio webhook] failed to advance waitlist offer after no answer", {
-        offerId,
-        error: error?.message ?? error
-      });
-    }
     return {
       handled: true,
       mode: "outbound",
       outcome: "call_no_answer",
       offerId,
       email: emailResult,
-      advanced: Boolean(advanced.nextOffer)
+      advanced: false,
+      responseDeadlineAt
     };
   }
 

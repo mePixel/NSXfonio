@@ -87,7 +87,7 @@ export const router = createBrowserRouter([
     element: <OnboardingPage />,
   },
   {
-    path: "/reschedule-offer/:offerId",
+    path: "/reschedule-offer/:candidateId",
     loader: publicReschedulerLoader,
     action: publicReschedulerAction,
     hydrateFallbackElement: <LoadingPage />,

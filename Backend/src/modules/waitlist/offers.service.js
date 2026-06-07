@@ -5,10 +5,11 @@ import { communicationLogs, waitingListEntries, waitlistOffers } from "../../db/
 import { writeAuditLog } from "../audit/audit.service.js";
 import { getCustomer } from "../customers/customers.service.js";
 import { assertOutboundCallConfig, triggerOutboundCall } from "../fonio/fonio.client.js";
+import { getEmailResponseDeadlineMinutes } from "../settings/settings.service.js";
 import { getSlot } from "../slots/slots.service.js";
 
-const ACTIVE_STATUSES  = ["pending", "calling", "whatsapp_sent"];
-const DEFAULT_DEADLINE_MINUTES = 60;
+const ACTIVE_STATUSES = ["pending", "calling", "call_no_answer", "whatsapp_sent"];
+const INLINE_EXPIRY_STATUSES = ["pending", "whatsapp_sent"];
 const CANCELLED_SLOT_OPENING_PROMPT =
   "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept.";
 
@@ -156,7 +157,7 @@ async function expireStaleActiveOffers(clientId, slotId) {
     .where(and(
       eq(waitlistOffers.clientId, clientId),
       eq(waitlistOffers.slotId, slotId),
-      inArray(waitlistOffers.status, ACTIVE_STATUSES),
+      inArray(waitlistOffers.status, INLINE_EXPIRY_STATUSES),
       lt(waitlistOffers.responseDeadlineAt, new Date())
     ));
 }
@@ -256,7 +257,7 @@ async function callEntry(clientId, slot, entry, offer) {
   return result;
 }
 
-export async function startOfferCycle(clientId, slotId, { userId = null, responseDeadlineMinutes = DEFAULT_DEADLINE_MINUTES } = {}) {
+export async function startOfferCycle(clientId, slotId, { userId = null, responseDeadlineMinutes = null } = {}) {
   const slot = await getSlot(clientId, slotId);
   if (!slot)                    throw Object.assign(new Error("Slot not found"), { status: 404 });
   if (slot.status !== "available") throw Object.assign(new Error("Slot is not available"), { status: 409 });
@@ -279,7 +280,8 @@ export async function startOfferCycle(clientId, slotId, { userId = null, respons
 
   assertOutboundCallConfig();
 
-  const responseDeadlineAt = new Date(Date.now() + responseDeadlineMinutes * 60 * 1000);
+  const resolvedDeadlineMinutes = responseDeadlineMinutes ?? await getEmailResponseDeadlineMinutes();
+  const responseDeadlineAt = new Date(Date.now() + resolvedDeadlineMinutes * 60 * 1000);
 
   const [offer] = await db
     .insert(waitlistOffers)
@@ -336,7 +338,8 @@ export async function advanceOfferCycle(clientId, offerId, { userId = null } = {
   }
 
   const slot = await getSlot(clientId, currentOffer.slotId);
-  const responseDeadlineAt = new Date(Date.now() + DEFAULT_DEADLINE_MINUTES * 60 * 1000);
+  const responseDeadlineMinutes = await getEmailResponseDeadlineMinutes();
+  const responseDeadlineAt = new Date(Date.now() + responseDeadlineMinutes * 60 * 1000);
 
   const [nextOffer] = await db
     .insert(waitlistOffers)
@@ -350,7 +353,14 @@ export async function advanceOfferCycle(clientId, offerId, { userId = null } = {
     })
     .returning();
 
-  await callEntry(clientId, slot, nextEntry, nextOffer);
+  try {
+    await callEntry(clientId, slot, nextEntry, nextOffer);
+  } catch (error) {
+    await db.update(waitlistOffers)
+      .set({ status: "timed_out", updatedAt: new Date() })
+      .where(eq(waitlistOffers.id, nextOffer.id));
+    throw error;
+  }
 
   await writeAuditLog({
     clientId,
