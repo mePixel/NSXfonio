@@ -368,6 +368,39 @@ export async function completeAcceptedReschedulerOffer(
     throw Object.assign(new Error("Offer not found"), { status: 404 });
   }
 
+  const [flow] = await db
+    .select()
+    .from(reschedulerFlows)
+    .where(and(
+      eq(reschedulerFlows.clientId, clientId),
+      eq(reschedulerFlows.originalSlotId, offer.slotId)
+    ))
+    .orderBy(desc(reschedulerFlows.createdAt))
+    .limit(1);
+
+  if (flow?.state === "filled" && flow.replacementAppointmentId) {
+    const [replacementAppointment] = await db
+      .select()
+      .from(appointments)
+      .where(and(
+        eq(appointments.clientId, clientId),
+        eq(appointments.id, flow.replacementAppointmentId)
+      ))
+      .limit(1);
+
+    return {
+      offerId: offer.id,
+      replacementAppointment: replacementAppointment ?? { id: flow.replacementAppointmentId },
+      cancelledAppointmentId: flow.cancelledAppointmentId,
+      nextOfferResult: null,
+      alreadyFilled: true
+    };
+  }
+
+  if (flow?.state === "aborted") {
+    throw Object.assign(new Error("This rebooking procedure has been aborted."), { status: 422 });
+  }
+
   if (!["calling", "pending", "whatsapp_sent"].includes(offer.status)) {
     throw Object.assign(new Error(`Offer cannot be accepted from status '${offer.status}'`), { status: 422 });
   }
@@ -495,13 +528,17 @@ export async function completeAcceptedReschedulerOffer(
 
     await tx
       .update(reschedulerCandidateCalls)
-      .set({ state: "accepted", updatedAt: now })
+      .set({
+        state: "accepted",
+        notes: payload?.summary ?? payload?.formattedPlainTranscript ?? payload?.formattedTranscript ?? null,
+        updatedAt: now
+      })
       .where(and(
         eq(reschedulerCandidateCalls.clientId, clientId),
         eq(reschedulerCandidateCalls.waitlistOfferId, offer.id)
       ));
 
-    const [flow] = await tx
+    const [filledFlow] = await tx
       .update(reschedulerFlows)
       .set({
         state: "filled",
@@ -517,16 +554,16 @@ export async function completeAcceptedReschedulerOffer(
       ))
       .returning();
 
-    if (flow) {
+    if (filledFlow) {
       await writeAuditLog(
         {
           clientId,
           userId,
-          appointmentId: flow.cancelledAppointmentId,
+          appointmentId: filledFlow.cancelledAppointmentId,
           entityType: "rescheduler_flow",
-          entityId: flow.id,
+          entityId: filledFlow.id,
           action: "rescheduler_filled",
-          fromState: flow.state,
+          fromState: flow?.state ?? null,
           toState: "filled",
           metadataJson: {
             offerId: offer.id,
@@ -548,6 +585,7 @@ export async function completeAcceptedReschedulerOffer(
       direction: "outbound",
       eventType: "waitlist_offer_accepted_and_rescheduled",
       status: "processed",
+      externalCallId: payload?.callId ?? payload?.id ?? null,
       payloadJson: payload ? JSON.stringify(payload) : null
     });
 
@@ -566,6 +604,34 @@ export async function completeAcceptedReschedulerOffer(
     replacementAppointment,
     cancelledAppointmentId: releasedAppointment?.id ?? appointmentToReplace?.id ?? null,
     nextOfferResult
+  };
+}
+
+export async function acceptReschedulerOffer(clientId, offerId, { payload = {}, userId = null } = {}) {
+  const result = await completeAcceptedReschedulerOffer(clientId, offerId, {
+    selectedAppointmentId: payload?.selectedAppointmentId
+      ?? payload?.cancellation?.appointmentId
+      ?? payload?.appointmentId
+      ?? payload?.appointment?.id
+      ?? payload?.selectedAppointment?.id
+      ?? payload?.reschedule?.appointmentToCancelId
+      ?? null,
+    payload,
+    userId
+  });
+
+  return {
+    handled: true,
+    mode: "rescheduler_accept",
+    alreadyFilled: Boolean(result.alreadyFilled),
+    appointmentId: result.replacementAppointment.id,
+    replacementAppointmentId: result.replacementAppointment.id,
+    cancelledAppointmentId: result.cancelledAppointmentId,
+    customerId: result.replacementAppointment.customerId ?? null,
+    slotId: result.replacementAppointment.slotId ?? null,
+    startsAt: result.replacementAppointment.startsAt ?? null,
+    endsAt: result.replacementAppointment.endsAt ?? null,
+    nextOfferResult: result.nextOfferResult
   };
 }
 

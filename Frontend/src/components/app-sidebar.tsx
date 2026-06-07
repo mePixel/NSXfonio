@@ -7,7 +7,6 @@ import {
   CalendarClock,
   ChevronsUpDown,
   CreditCard,
-  LayoutDashboard,
   LogOut,
   RotateCcw,
   Settings2,
@@ -42,11 +41,6 @@ import {
 import { type AuthSession } from "@/lib/auth";
 
 const navItems = [
-  {
-    title: "Dashboard",
-    url: "/",
-    icon: LayoutDashboard,
-  },
   {
     title: "Appointments",
     url: "/appointments",

@@ -62,7 +62,7 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle>Appearance</CardTitle>
           <CardDescription>
-            Choose the color mode used across the dashboard.
+            Choose the color mode used across the app.
           </CardDescription>
         </CardHeader>
         <CardContent>

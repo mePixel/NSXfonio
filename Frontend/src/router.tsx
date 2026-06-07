@@ -1,4 +1,4 @@
-import { createBrowserRouter, redirect } from "react-router"
+import { createBrowserRouter, Navigate, redirect } from "react-router"
 
 import App from "@/App"
 import { RouteErrorPage } from "@/components/route-error"
@@ -12,7 +12,6 @@ import {
 import { ClientsPage } from "@/routes/clients"
 import { clientsAction, clientsLoader } from "@/routes/clients-data"
 import { getCurrentSession } from "@/lib/auth"
-import { DashboardPage } from "@/routes/dashboard"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
 import { PublicReschedulerPage } from "@/routes/public-rescheduler"
@@ -53,7 +52,7 @@ async function loginLoader() {
   const session = await getCurrentSession()
 
   if (session) {
-    throw redirect("/")
+    throw redirect("/appointments")
   }
 
   return null
@@ -67,7 +66,7 @@ async function onboardingLoader() {
   }
 
   if (session.user.clientId) {
-    throw redirect("/")
+    throw redirect("/appointments")
   }
 
   return session
@@ -105,7 +104,8 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <DashboardPage />,
+        loader: () => redirect("/appointments"),
+        element: <Navigate to="/appointments" replace />,
       },
       {
         path: "appointments",
@@ -117,7 +117,7 @@ export const router = createBrowserRouter([
         path: "appointment-settings",
         loader: appointmentSettingsLoader,
         action: appointmentSettingsAction,
-        element: <DashboardPage />,
+        element: <Navigate to="/appointments" replace />,
       },
       {
         path: "clients",
@@ -139,7 +139,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "*",
-        element: <DashboardPage />,
+        element: <Navigate to="/appointments" replace />,
       },
     ],
   },

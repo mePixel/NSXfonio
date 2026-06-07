@@ -1,7 +1,6 @@
 import nodemailer from "nodemailer";
 import { env } from "../../config/env.js";
 
-// Initialize email transporter (only if email is configured)
 let transporter = null;
 
 function buildOfferConfirmationLink(offerId) {
@@ -27,7 +26,6 @@ function initializeTransporter() {
       }
     });
 
-    // Verify connection
     transporter.verify((error) => {
       if (error) {
         console.error("[email] SMTP connection failed:", error);
@@ -42,6 +40,16 @@ function initializeTransporter() {
     console.error("[email] Failed to initialize transporter:", error);
     return null;
   }
+}
+
+function formatSlotTime(slot) {
+  const startsAt = slot?.startsAt ?? slot?.startTime ?? null;
+  if (!startsAt) return null;
+
+  return new Date(startsAt).toLocaleString("de-AT", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
 }
 
 export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
@@ -60,6 +68,7 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
     const customerName = `${customer.firstName} ${customer.lastName}`;
     const subject = `We Tried to Reach You - About Your ${slot?.title || "Appointment"}`;
     const confirmationLink = buildOfferConfirmationLink(offer?.id);
+    const slotTime = formatSlotTime(slot);
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -87,8 +96,7 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
         
         <p style="margin-top: 24px; font-size: 14px; color: #666;">
           <strong>Appointment Details:</strong><br>
-          ${slot?.title ? `Title: ${slot.title}` : ''}<br>
-          ${slot?.startTime ? `Scheduled for: ${new Date(slot.startTime).toLocaleString()}` : ''}
+          ${slotTime ? `Available slot: ${slotTime}` : "An earlier slot is available."}
         </p>
         
         <p style="margin-top: 24px; border-top: 1px solid #eee; padding-top: 16px; font-size: 12px; color: #999;">
@@ -102,7 +110,7 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
 
       Hi ${customerName},
 
-      We recently tried to give you a call about your ${slot?.title || "appointment"}, but we weren't able to reach you.
+      We recently tried to give you a call about an earlier appointment, but we weren't able to reach you.
 
       An earlier appointment is currently available for you. Open this link to confirm the new appointment and choose which of your next appointments should be cancelled:
       ${confirmationLink}
@@ -113,8 +121,7 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
       - Use the confirmation link above to accept the earlier slot
 
       Appointment Details:
-      ${slot?.title ? `Title: ${slot.title}` : ''}
-      ${slot?.startTime ? `Scheduled for: ${new Date(slot.startTime).toLocaleString()}` : ''}
+      ${slotTime ? `Available slot: ${slotTime}` : "An earlier slot is available."}
 
       This is an automated message. Please do not reply to this email if you need immediate assistance.
     `;
