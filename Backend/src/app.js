@@ -12,6 +12,7 @@ import { appointmentsRouter } from "./modules/appointments/appointments.routes.j
 import { auditRouter } from "./modules/audit/audit.routes.js";
 import { settingsRouter } from "./modules/settings/settings.routes.js";
 import { waitlistRouter } from "./modules/waitlist/waitlist.routes.js";
+import { reschedulerRouter } from "./modules/rescheduler/rescheduler.routes.js";
 import { slotsRouter } from "./modules/slots/slots.routes.js";
 import { webhooksRouter } from "./modules/webhooks/webhooks.routes.js";
 import { fonioRouter } from "./modules/fonio/fonio.routes.js";
@@ -62,6 +63,7 @@ app.use("/api/appointments", appointmentsRouter);
 app.use("/api/audit-logs", auditRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/waiting-list", waitlistRouter);
+app.use("/api/rescheduler", reschedulerRouter);
 app.use("/api/slots", slotsRouter);
 app.use("/api/webhooks", webhooksRouter);
 app.use("/api/fonio", fonioRouter);

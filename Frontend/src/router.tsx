@@ -15,6 +15,8 @@ import { getCurrentSession } from "@/lib/auth"
 import { DashboardPage } from "@/routes/dashboard"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
+import { ReschedulerPage } from "@/routes/rescheduler"
+import { reschedulerAction, reschedulerLoader } from "@/routes/rescheduler-data"
 import { settingsAction, settingsLoader } from "@/routes/settings-data"
 import { OnboardingPage } from "@/routes/onboarding"
 
@@ -108,6 +110,12 @@ export const router = createBrowserRouter([
         loader: clientsLoader,
         action: clientsAction,
         element: <ClientsPage />,
+      },
+      {
+        path: "rescheduler",
+        loader: reschedulerLoader,
+        action: reschedulerAction,
+        element: <ReschedulerPage />,
       },
       {
         path: "settings",

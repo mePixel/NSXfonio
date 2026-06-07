@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { webhookEvents, waitlistOffers } from "../../db/schema.js";
+import { recordCandidateForOffer, syncReschedulerOfferOutcome } from "../rescheduler/rescheduler.service.js";
 import { advanceOfferCycle, moveWaitlistEntryToEnd } from "../waitlist/offers.service.js";
 import { handleInboundAppointmentWebhook, isInboundAppointmentWebhook } from "./fonio.inbound.service.js";
 
@@ -58,8 +59,12 @@ async function handleOutboundWebhook(payload) {
     await db.update(waitlistOffers)
       .set({ status: "call_no_answer", updatedAt: new Date() })
       .where(eq(waitlistOffers.id, offerId));
+    await syncReschedulerOfferOutcome(offer.clientId, offerId);
     await moveWaitlistEntryToEnd(offer.clientId, offer.waitingListEntryId);
-    await advanceOfferCycle(offer.clientId, offerId);
+    const advanced = await advanceOfferCycle(offer.clientId, offerId);
+    if (advanced.nextOffer?.id) {
+      await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+    }
     return { handled: true, mode: "outbound", outcome: "call_no_answer", offerId };
   }
 
@@ -67,6 +72,7 @@ async function handleOutboundWebhook(payload) {
     await db.update(waitlistOffers)
       .set({ status: "accepted", updatedAt: new Date() })
       .where(eq(waitlistOffers.id, offerId));
+    await syncReschedulerOfferOutcome(offer.clientId, offerId);
     return { handled: true, mode: "outbound", outcome: "accepted", offerId };
   }
 

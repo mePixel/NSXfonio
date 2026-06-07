@@ -3,6 +3,7 @@ import { db } from "../../db/index.js";
 import { appointments, slots } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
 import { autoStartOfferCycle } from "../waitlist/offers.service.js";
+import { recordCancellationFlow } from "../rescheduler/rescheduler.service.js";
 import { getAppointment } from "./appointments.service.js";
 
 // Enforces the allowed transition matrix from SYSTEMS.md.
@@ -67,6 +68,10 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
   let waitlistOffer = null;
   if (toStatus === "cancelled" && updated?.slotId) {
     waitlistOffer = await autoStartOfferCycle(clientId, updated.slotId, { userId });
+  }
+
+  if (toStatus === "cancelled") {
+    await recordCancellationFlow(clientId, updated, waitlistOffer, { userId });
   }
 
   if (waitlistOffer) {

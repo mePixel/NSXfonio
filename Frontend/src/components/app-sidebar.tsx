@@ -9,6 +9,7 @@ import {
   CreditCard,
   LayoutDashboard,
   LogOut,
+  RotateCcw,
   Settings2,
   Sparkles,
   UsersRound,
@@ -55,6 +56,11 @@ const navItems = [
     title: "Clients",
     url: "/clients",
     icon: UsersRound,
+  },
+  {
+    title: "Rescheduler",
+    url: "/rescheduler",
+    icon: RotateCcw,
   },
 ];
 

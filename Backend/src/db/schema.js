@@ -39,6 +39,22 @@ export const waitlistOfferStatusEnum = pgEnum("waitlist_offer_status", [
   "timed_out"
 ]);
 
+export const reschedulerStateEnum = pgEnum("rescheduler_state", [
+  "pending",
+  "calling",
+  "filled",
+  "aborted",
+  "failed"
+]);
+
+export const reschedulerCandidateCallStateEnum = pgEnum("rescheduler_candidate_call_state", [
+  "not_reached",
+  "declined",
+  "interested",
+  "accepted",
+  "skipped"
+]);
+
 export const communicationChannelEnum = pgEnum("communication_channel", [
   "call",
   "whatsapp"
@@ -267,6 +283,62 @@ export const waitlistOffers = pgTable(
   ]
 );
 
+// ── Cancelled-booking rescheduler ────────────────────────────────────────────
+
+export const reschedulerFlows = pgTable(
+  "rescheduler_flows",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    cancelledAppointmentId: text("cancelled_appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    originalSlotId: text("original_slot_id").references(() => slots.id, { onDelete: "set null" }),
+    state: reschedulerStateEnum("state").notNull().default("pending"),
+    replacementAppointmentId: text("replacement_appointment_id").references(() => appointments.id, { onDelete: "set null" }),
+    replacementCustomerId: text("replacement_customer_id").references(() => customers.id, { onDelete: "set null" }),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    abortedAt: timestamp("aborted_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("rescheduler_flows_client_id_idx").on(table.clientId),
+    index("rescheduler_flows_cancelled_appointment_idx").on(table.cancelledAppointmentId),
+    index("rescheduler_flows_state_idx").on(table.state),
+    uniqueIndex("rescheduler_flows_cancelled_appointment_unique_idx").on(table.cancelledAppointmentId)
+  ]
+);
+
+export const reschedulerCandidateCalls = pgTable(
+  "rescheduler_candidate_calls",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    reschedulerFlowId: text("rescheduler_flow_id")
+      .notNull()
+      .references(() => reschedulerFlows.id, { onDelete: "cascade" }),
+    customerId: text("customer_id").references(() => customers.id, { onDelete: "set null" }),
+    waitlistOfferId: text("waitlist_offer_id").references(() => waitlistOffers.id, { onDelete: "set null" }),
+    state: reschedulerCandidateCallStateEnum("state").notNull().default("skipped"),
+    notes: text("notes"),
+    calledAt: timestamp("called_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow()
+  },
+  (table) => [
+    index("rescheduler_candidate_calls_client_id_idx").on(table.clientId),
+    index("rescheduler_candidate_calls_flow_id_idx").on(table.reschedulerFlowId),
+    index("rescheduler_candidate_calls_customer_id_idx").on(table.customerId),
+    index("rescheduler_candidate_calls_waitlist_offer_id_idx").on(table.waitlistOfferId)
+  ]
+);
+
 // ── Communication logs ────────────────────────────────────────────────────────
 
 export const communicationLogs = pgTable(
@@ -376,6 +448,8 @@ export const clientRelations = relations(clients, ({ many }) => ({
   appointments: many(appointments),
   waitingListEntries: many(waitingListEntries),
   waitlistOffers: many(waitlistOffers),
+  reschedulerFlows: many(reschedulerFlows),
+  reschedulerCandidateCalls: many(reschedulerCandidateCalls),
   communicationLogs: many(communicationLogs),
   auditLogs: many(auditLogs),
   fonioApiKeys: many(fonioApiKeys)
@@ -400,6 +474,7 @@ export const customerRelations = relations(customers, ({ one, many }) => ({
   client: one(clients, { fields: [customers.clientId], references: [clients.id] }),
   appointments: many(appointments),
   waitingListEntries: many(waitingListEntries),
+  reschedulerCandidateCalls: many(reschedulerCandidateCalls),
   communicationLogs: many(communicationLogs)
 }));
 
@@ -418,6 +493,8 @@ export const appointmentRelations = relations(appointments, ({ one, many }) => (
   client: one(clients, { fields: [appointments.clientId], references: [clients.id] }),
   customer: one(customers, { fields: [appointments.customerId], references: [customers.id] }),
   slot: one(slots, { fields: [appointments.slotId], references: [slots.id] }),
+  cancelledReschedulerFlows: many(reschedulerFlows, { relationName: "cancelledAppointment" }),
+  replacementReschedulerFlows: many(reschedulerFlows, { relationName: "replacementAppointment" }),
   communicationLogs: many(communicationLogs)
 }));
 
@@ -435,6 +512,42 @@ export const waitlistOfferRelations = relations(waitlistOffers, ({ one, many }) 
     references: [waitingListEntries.id]
   }),
   communicationLogs: many(communicationLogs)
+}));
+
+export const reschedulerFlowRelations = relations(reschedulerFlows, ({ one, many }) => ({
+  client: one(clients, { fields: [reschedulerFlows.clientId], references: [clients.id] }),
+  cancelledAppointment: one(appointments, {
+    fields: [reschedulerFlows.cancelledAppointmentId],
+    references: [appointments.id],
+    relationName: "cancelledAppointment"
+  }),
+  originalSlot: one(slots, { fields: [reschedulerFlows.originalSlotId], references: [slots.id] }),
+  replacementAppointment: one(appointments, {
+    fields: [reschedulerFlows.replacementAppointmentId],
+    references: [appointments.id],
+    relationName: "replacementAppointment"
+  }),
+  replacementCustomer: one(customers, {
+    fields: [reschedulerFlows.replacementCustomerId],
+    references: [customers.id]
+  }),
+  candidateCalls: many(reschedulerCandidateCalls)
+}));
+
+export const reschedulerCandidateCallRelations = relations(reschedulerCandidateCalls, ({ one }) => ({
+  client: one(clients, { fields: [reschedulerCandidateCalls.clientId], references: [clients.id] }),
+  flow: one(reschedulerFlows, {
+    fields: [reschedulerCandidateCalls.reschedulerFlowId],
+    references: [reschedulerFlows.id]
+  }),
+  customer: one(customers, {
+    fields: [reschedulerCandidateCalls.customerId],
+    references: [customers.id]
+  }),
+  waitlistOffer: one(waitlistOffers, {
+    fields: [reschedulerCandidateCalls.waitlistOfferId],
+    references: [waitlistOffers.id]
+  })
 }));
 
 export const fonioApiKeyRelations = relations(fonioApiKeys, ({ one }) => ({
@@ -456,6 +569,8 @@ export const schema = {
   appointments,
   waitingListEntries,
   waitlistOffers,
+  reschedulerFlows,
+  reschedulerCandidateCalls,
   communicationLogs,
   webhookEvents,
   auditLogs,
@@ -470,5 +585,7 @@ export const schema = {
   appointmentRelations,
   waitingListEntryRelations,
   waitlistOfferRelations,
+  reschedulerFlowRelations,
+  reschedulerCandidateCallRelations,
   fonioApiKeyRelations
 };

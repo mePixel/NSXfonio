@@ -43,6 +43,13 @@
       "when": 1780748464000,
       "tag": "0005_create_fonio_api_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780836000000,
+      "tag": "0006_create_rescheduler",
+      "breakpoints": true
     }
   ]
 }
