@@ -327,6 +327,7 @@ export const reschedulerCandidateCalls = pgTable(
     customerId: text("customer_id").references(() => customers.id, { onDelete: "set null" }),
     waitlistOfferId: text("waitlist_offer_id").references(() => waitlistOffers.id, { onDelete: "set null" }),
     state: reschedulerCandidateCallStateEnum("state").notNull().default("skipped"),
+    fulfilledBy: text("fulfilled_by"),
     notes: text("notes"),
     calledAt: timestamp("called_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),

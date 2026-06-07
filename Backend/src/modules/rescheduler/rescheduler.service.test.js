@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   assertPublicOfferAvailability,
-  finalizePublicOfferDecline
+  finalizePublicOfferDecline,
+  getReschedulerFulfillmentChannel
 } from "./rescheduler.service.js";
 
 test("finalizePublicOfferDecline advances immediately and records the next candidate", async () => {
@@ -73,4 +74,12 @@ test("assertPublicOfferAvailability rejects inactive offers after decline", () =
     }),
     (error) => error?.status === 409 && error.message === "This reschedule invitation is no longer active."
   );
+});
+
+test("public offer acceptance is attributed to email", () => {
+  assert.equal(
+    getReschedulerFulfillmentChannel({ source: "public_offer_acceptance_page" }),
+    "email"
+  );
+  assert.equal(getReschedulerFulfillmentChannel({ source: "fonio" }), "call");
 });

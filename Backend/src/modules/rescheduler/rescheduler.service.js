@@ -35,6 +35,10 @@ function isPublicOfferStatus(status) {
   return ["calling", "pending", "whatsapp_sent", "call_no_answer"].includes(status);
 }
 
+export function getReschedulerFulfillmentChannel(payload) {
+  return payload?.source === "public_offer_acceptance_page" ? "email" : "call";
+}
+
 export function assertPublicOfferAvailability({
   flowState,
   responseDeadlineAt,
@@ -818,6 +822,7 @@ export async function completeAcceptedReschedulerOffer(
       slotId: waitlistOffers.slotId,
       waitingListEntryId: waitlistOffers.waitingListEntryId,
       status: waitlistOffers.status,
+      responseDeadlineAt: waitlistOffers.responseDeadlineAt,
       customerId: waitingListEntries.customerId,
       slotStartsAt: slots.startsAt,
       slotEndsAt: slots.endsAt,
@@ -874,8 +879,6 @@ export async function completeAcceptedReschedulerOffer(
     throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
   }
 
-
-  const candidateWindow = await getReschedulerCandidateWindow();
   const resolvedCandidateWindow = candidateWindow ?? await getReschedulerCandidateWindow();
   const upcomingAppointments = (await listUpcomingAppointmentsForCustomer(clientId, offer.customerId))
     .slice(0, resolvedCandidateWindow);
@@ -898,6 +901,7 @@ export async function completeAcceptedReschedulerOffer(
   }
 
   const now = new Date();
+  const fulfilledBy = getReschedulerFulfillmentChannel(payload);
   let releasedAppointment = null;
   let nextOfferResult = null;
 
@@ -1007,6 +1011,7 @@ export async function completeAcceptedReschedulerOffer(
       .update(reschedulerCandidateCalls)
       .set({
         state: "accepted",
+        fulfilledBy,
         notes: payload?.summary ?? payload?.formattedPlainTranscript ?? payload?.formattedTranscript ?? null,
         updatedAt: now
       })
@@ -1058,9 +1063,11 @@ export async function completeAcceptedReschedulerOffer(
       appointmentId: createdAppointment.id,
       customerId: offer.customerId,
       waitlistOfferId: offer.id,
-      channel: "call",
+      channel: fulfilledBy,
       direction: "outbound",
-      eventType: "waitlist_offer_accepted_and_rescheduled",
+      eventType: fulfilledBy === "email"
+        ? "waitlist_email_offer_accepted_and_rescheduled"
+        : "waitlist_offer_accepted_and_rescheduled",
       status: "processed",
       externalCallId: payload?.callId ?? payload?.id ?? null,
       payloadJson: payload ? JSON.stringify(payload) : null
@@ -1069,7 +1076,9 @@ export async function completeAcceptedReschedulerOffer(
     return { replacementAppointment: createdAppointment };
   });
 
-  await deleteWaitlistEntryByCustomer(clientId, offer.customerId);
+  if (fulfilledBy !== "email" || !offer.responseDeadlineAt) {
+    await deleteWaitlistEntryByCustomer(clientId, offer.customerId);
+  }
 
   if (releasedAppointment?.slotId) {
     nextOfferResult = await autoStartOfferCycle(clientId, releasedAppointment.slotId, { userId });
@@ -1144,77 +1153,6 @@ export async function acceptReschedulerSlotBooking(
   });
 
   return serializeAcceptResult(result);
-}
-
-export async function completeAcceptedReschedulerOfferPublic(
-  candidateId,
-  { selectedAppointmentId = null, payload = null } = {}
-) {
-  const [candidate] = await db
-    .select({
-      clientId: reschedulerCandidateCalls.clientId,
-      offerId: reschedulerCandidateCalls.waitlistOfferId,
-      responseDeadlineAt: waitlistOffers.responseDeadlineAt
-    })
-    .from(reschedulerCandidateCalls)
-    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
-    .where(eq(reschedulerCandidateCalls.id, candidateId))
-    .limit(1);
-
-  if (!candidate?.offerId) {
-    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
-  }
-
-  if (candidate.responseDeadlineAt && new Date(candidate.responseDeadlineAt) <= new Date()) {
-    throw Object.assign(new Error("This reschedule invitation has expired."), { status: 410 });
-  }
-
-  return completeAcceptedReschedulerOffer(candidate.clientId, candidate.offerId, {
-    selectedAppointmentId,
-    payload,
-    candidateWindow: PUBLIC_RESCHEDULE_CHOICES,
-    allowedOfferStatuses: ["calling", "pending", "whatsapp_sent", "call_no_answer"]
-  });
-}
-
-export async function declineReschedulerOfferPublic(candidateId, { payload = null } = {}) {
-  const [candidate] = await db
-    .select({
-      clientId: reschedulerCandidateCalls.clientId,
-      offerId: reschedulerCandidateCalls.waitlistOfferId,
-      responseDeadlineAt: waitlistOffers.responseDeadlineAt,
-      status: waitlistOffers.status
-    })
-    .from(reschedulerCandidateCalls)
-    .innerJoin(waitlistOffers, eq(reschedulerCandidateCalls.waitlistOfferId, waitlistOffers.id))
-    .where(eq(reschedulerCandidateCalls.id, candidateId))
-    .limit(1);
-
-  if (!candidate?.offerId) {
-    throw Object.assign(new Error("Reschedule invitation not found"), { status: 404 });
-  }
-
-  assertPublicOfferAvailability({
-    flowState: null,
-    responseDeadlineAt: candidate.responseDeadlineAt,
-    status: candidate.status
-  });
-
-  const result = await finalizePublicOfferDecline(candidate, {
-    updateOfferStatus: () => db
-      .update(waitlistOffers)
-      .set({ status: "declined", updatedAt: new Date() })
-      .where(and(
-        eq(waitlistOffers.clientId, candidate.clientId),
-        eq(waitlistOffers.id, candidate.offerId),
-        inArray(waitlistOffers.status, ["calling", "pending", "whatsapp_sent", "call_no_answer"])
-      )),
-    syncOfferOutcome: syncReschedulerOfferOutcome,
-    advanceOffer: advanceOfferCycle,
-    recordNextCandidate: recordCandidateForOffer
-  });
-
-  return { ...result, payload };
 }
 
 export async function completeAcceptedReschedulerOfferPublic(
@@ -1407,6 +1345,7 @@ export async function listReschedulerFlows(clientId) {
         id: reschedulerCandidateCalls.id,
         reschedulerFlowId: reschedulerCandidateCalls.reschedulerFlowId,
         state: reschedulerCandidateCalls.state,
+        fulfilledBy: reschedulerCandidateCalls.fulfilledBy,
         notes: reschedulerCandidateCalls.notes,
         calledAt: reschedulerCandidateCalls.calledAt,
         createdAt: reschedulerCandidateCalls.createdAt,
@@ -1441,6 +1380,7 @@ export async function listReschedulerFlows(clientId) {
       state: candidate.offerStatus
         ? mapOfferStatusToCandidateState(candidate.offerStatus)
         : candidate.state,
+      fulfilledBy: candidate.fulfilledBy,
       notes: candidate.notes,
       calledAt: candidate.calledAt,
       createdAt: candidate.createdAt,

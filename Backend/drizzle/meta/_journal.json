@@ -57,6 +57,13 @@
       "when": 1780836001000,
       "tag": "0007_add_email_communication_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780836002000,
+      "tag": "0008_add_rescheduler_fulfilled_by",
+      "breakpoints": true
     }
   ]
 }
