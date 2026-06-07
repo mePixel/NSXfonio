@@ -1,7 +1,6 @@
 import nodemailer from "nodemailer";
 import { env } from "../../config/env.js";
 
-// Initialize email transporter (only if email is configured)
 let transporter = null;
 
 function initializeTransporter() {
@@ -23,7 +22,6 @@ function initializeTransporter() {
       }
     });
 
-    // Verify connection
     transporter.verify((error) => {
       if (error) {
         console.error("[email] SMTP connection failed:", error);
@@ -40,6 +38,16 @@ function initializeTransporter() {
   }
 }
 
+function formatSlotTime(slot) {
+  const startsAt = slot?.startsAt ?? slot?.startTime ?? null;
+  if (!startsAt) return null;
+
+  return new Date(startsAt).toLocaleString("de-AT", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+
 export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
   const emailTransporter = initializeTransporter();
   if (!emailTransporter) {
@@ -53,27 +61,26 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
   }
 
   try {
-    const customerName = `${customer.firstName} ${customer.lastName}`;
-    const subject = `We Tried to Reach You - About Your ${slot?.title || "Appointment"}`;
+    const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || "there";
+    const slotTime = formatSlotTime(slot);
+    const subject = "We tried to reach you about an earlier appointment";
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2>We Tried to Reach You</h2>
         <p>Hi ${customerName},</p>
         
-        <p>We recently tried to give you a call about your ${slot?.title || "appointment"}, but we weren't able to reach you.</p>
+        <p>We recently tried to give you a call about an earlier appointment, but we weren't able to reach you.</p>
         
         <p>We'd still love to help! Here are some ways you can follow up:</p>
         <ul>
           <li>Call us back at your earliest convenience</li>
           <li>Reply to this email to let us know your availability</li>
-          <li>Check our website for available time slots</li>
         </ul>
         
         <p style="margin-top: 24px; font-size: 14px; color: #666;">
           <strong>Appointment Details:</strong><br>
-          ${slot?.title ? `Title: ${slot.title}` : ''}<br>
-          ${slot?.startTime ? `Scheduled for: ${new Date(slot.startTime).toLocaleString()}` : ''}
+          ${slotTime ? `Available slot: ${slotTime}` : "An earlier slot is available."}
         </p>
         
         <p style="margin-top: 24px; border-top: 1px solid #eee; padding-top: 16px; font-size: 12px; color: #999;">
@@ -87,16 +94,14 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
 
       Hi ${customerName},
 
-      We recently tried to give you a call about your ${slot?.title || "appointment"}, but we weren't able to reach you.
+      We recently tried to give you a call about an earlier appointment, but we weren't able to reach you.
 
       We'd still love to help! Here are some ways you can follow up:
       - Call us back at your earliest convenience
       - Reply to this email to let us know your availability
-      - Check our website for available time slots
 
       Appointment Details:
-      ${slot?.title ? `Title: ${slot.title}` : ''}
-      ${slot?.startTime ? `Scheduled for: ${new Date(slot.startTime).toLocaleString()}` : ''}
+      ${slotTime ? `Available slot: ${slotTime}` : "An earlier slot is available."}
 
       This is an automated message. Please do not reply to this email if you need immediate assistance.
     `;
