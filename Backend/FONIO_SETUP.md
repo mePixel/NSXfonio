@@ -299,7 +299,7 @@ Request body:
 
 ```json
 {
-  "slotId": "{{slotId}}",
+  "offerId": "{{offerId}}",
   "selectedAppointmentId": "<required when the patient has multiple upcoming appointments>",
   "callId": "{{callId}}",
   "summary": "Patient accepted the earlier appointment.",
@@ -307,7 +307,7 @@ Request body:
 }
 ```
 
-`offerId` and `patientId` are optional legacy context. The booking operation is driven by the offered slot; the backend resolves the active waitlist patient for that slot from the database, so the agent must not invent or reuse an offer id or patient id.
+`slotId` and `patientId` are optional legacy context. The booking operation should be driven by the exact `offerId` from the current call context. The agent must not invent or reuse an offer id or slot id from any previous call.
 
 Response:
 
