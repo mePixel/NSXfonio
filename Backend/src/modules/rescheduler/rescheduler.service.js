@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "../../db/index.js";
 import {
@@ -19,6 +19,7 @@ import { autoStartOfferCycle } from "../waitlist/offers.service.js";
 import { deleteWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
 const ACTIVE_FLOW_STATES = ["pending", "calling", "failed"];
+const PUBLIC_RESCHEDULE_CHOICES = 3;
 const replacementCustomers = alias(customers, "replacement_customers");
 
 function mapOfferStatusToCandidateState(status) {
@@ -87,6 +88,86 @@ function serializeFlowRow(row, candidates) {
         }
       : null,
     candidates
+  };
+}
+
+function serializePublicAppointment(appointment) {
+  return {
+    id: appointment.id,
+    title: appointment.title,
+    startsAt: appointment.startsAt,
+    endsAt: appointment.endsAt,
+    status: appointment.status
+  };
+}
+
+export async function getPublicOfferSummary(offerId) {
+  const [offer] = await db
+    .select({
+      id: waitlistOffers.id,
+      status: waitlistOffers.status,
+      responseDeadlineAt: waitlistOffers.responseDeadlineAt,
+      createdAt: waitlistOffers.createdAt,
+      clientId: waitlistOffers.clientId,
+      customerId: waitingListEntries.customerId,
+      slotId: waitlistOffers.slotId,
+      slotStartsAt: slots.startsAt,
+      slotEndsAt: slots.endsAt,
+      slotStatus: slots.status,
+      customerFirstName: customers.firstName,
+      customerLastName: customers.lastName
+    })
+    .from(waitlistOffers)
+    .innerJoin(waitingListEntries, eq(waitlistOffers.waitingListEntryId, waitingListEntries.id))
+    .innerJoin(customers, eq(waitingListEntries.customerId, customers.id))
+    .innerJoin(slots, eq(waitlistOffers.slotId, slots.id))
+    .where(eq(waitlistOffers.id, offerId))
+    .limit(1);
+
+  if (!offer) {
+    throw Object.assign(new Error("Offer not found"), { status: 404 });
+  }
+
+  if (!["calling", "pending", "whatsapp_sent"].includes(offer.status)) {
+    throw Object.assign(new Error("This offer is no longer active."), { status: 422 });
+  }
+
+  if (offer.slotStatus !== "available") {
+    throw Object.assign(new Error("This appointment is no longer available."), { status: 409 });
+  }
+
+  const upcomingAppointments = await db
+    .select()
+    .from(appointments)
+    .where(and(
+      eq(appointments.clientId, offer.clientId),
+      eq(appointments.customerId, offer.customerId),
+      gte(appointments.startsAt, new Date()),
+      inArray(appointments.status, ["scheduled", "confirmation_pending", "confirmed", "followup_sent", "cancel_pending"])
+    ))
+    .orderBy(asc(appointments.startsAt));
+
+  return {
+    offer: {
+      id: offer.id,
+      status: offer.status,
+      responseDeadlineAt: offer.responseDeadlineAt,
+      createdAt: offer.createdAt,
+      slot: {
+        id: offer.slotId,
+        startsAt: offer.slotStartsAt,
+        endsAt: offer.slotEndsAt
+      },
+      customer: {
+        id: offer.customerId,
+        firstName: offer.customerFirstName,
+        lastName: offer.customerLastName
+      },
+      upcomingAppointments: upcomingAppointments
+        .slice(0, PUBLIC_RESCHEDULE_CHOICES)
+        .map(serializePublicAppointment),
+      totalUpcomingAppointments: upcomingAppointments.length
+    }
   };
 }
 
@@ -264,7 +345,7 @@ export async function syncReschedulerOfferOutcome(clientId, offerId) {
 export async function completeAcceptedReschedulerOffer(
   clientId,
   offerId,
-  { selectedAppointmentId = null, userId = null, payload = null } = {}
+  { selectedAppointmentId = null, userId = null, payload = null, candidateWindow = null } = {}
 ) {
   const [offer] = await db
     .select({
@@ -295,9 +376,9 @@ export async function completeAcceptedReschedulerOffer(
     throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
   }
 
-  const candidateWindow = await getReschedulerCandidateWindow();
+  const resolvedCandidateWindow = candidateWindow ?? await getReschedulerCandidateWindow();
   const upcomingAppointments = (await listUpcomingAppointmentsForCustomer(clientId, offer.customerId))
-    .slice(0, candidateWindow);
+    .slice(0, resolvedCandidateWindow);
   let appointmentToReplace = null;
 
   if (selectedAppointmentId) {
@@ -486,6 +567,30 @@ export async function completeAcceptedReschedulerOffer(
     cancelledAppointmentId: releasedAppointment?.id ?? appointmentToReplace?.id ?? null,
     nextOfferResult
   };
+}
+
+export async function completeAcceptedReschedulerOfferPublic(
+  offerId,
+  { selectedAppointmentId = null, payload = null } = {}
+) {
+  const [offer] = await db
+    .select({
+      id: waitlistOffers.id,
+      clientId: waitlistOffers.clientId
+    })
+    .from(waitlistOffers)
+    .where(eq(waitlistOffers.id, offerId))
+    .limit(1);
+
+  if (!offer) {
+    throw Object.assign(new Error("Offer not found"), { status: 404 });
+  }
+
+  return completeAcceptedReschedulerOffer(offer.clientId, offerId, {
+    selectedAppointmentId,
+    payload,
+    candidateWindow: PUBLIC_RESCHEDULE_CHOICES
+  });
 }
 
 async function syncCandidatesFromOffers(clientId, flow) {

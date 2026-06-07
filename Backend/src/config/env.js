@@ -29,6 +29,12 @@ const configuredClientOrigins = (process.env.CLIENT_ORIGIN || "")
   .filter(Boolean);
 
 const clientOrigins = [...new Set([...defaultClientOrigins, ...configuredClientOrigins])];
+const publicAppUrl = (
+  process.env.PUBLIC_APP_URL
+  || clientOrigins.find((origin) => origin.startsWith("https://"))
+  || clientOrigins[0]
+  || "http://localhost:5173"
+).replace(/\/$/, "");
 
 function parseJsonObject(value, fallback = {}) {
   if (!value) return fallback;
@@ -63,5 +69,6 @@ export const env = {
   smtpUser: process.env.SMTP_USER,
   smtpPassword: process.env.SMTP_PASSWORD,
   smtpFromEmail: process.env.SMTP_FROM_EMAIL,
-  smtpReplyTo: process.env.SMTP_REPLY_TO
+  smtpReplyTo: process.env.SMTP_REPLY_TO,
+  publicAppUrl
 };

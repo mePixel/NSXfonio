@@ -4,6 +4,10 @@ import { env } from "../../config/env.js";
 // Initialize email transporter (only if email is configured)
 let transporter = null;
 
+function buildOfferConfirmationLink(offerId) {
+  return `${env.publicAppUrl}/reschedule-offer/${encodeURIComponent(offerId)}`;
+}
+
 function initializeTransporter() {
   if (transporter) return transporter;
 
@@ -55,6 +59,7 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
   try {
     const customerName = `${customer.firstName} ${customer.lastName}`;
     const subject = `We Tried to Reach You - About Your ${slot?.title || "Appointment"}`;
+    const confirmationLink = buildOfferConfirmationLink(offer?.id);
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -62,12 +67,22 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
         <p>Hi ${customerName},</p>
         
         <p>We recently tried to give you a call about your ${slot?.title || "appointment"}, but we weren't able to reach you.</p>
+        <p>An earlier appointment is currently available for you. Use the link below to confirm the new appointment and choose which of your next appointments should be cancelled.</p>
+        <p style="margin: 24px 0;">
+          <a
+            href="${confirmationLink}"
+            style="display: inline-block; background: #111827; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 8px; font-weight: 600;"
+          >
+            Confirm earlier appointment
+          </a>
+        </p>
+        <p>If the button does not work, open this link in your browser:<br><a href="${confirmationLink}">${confirmationLink}</a></p>
         
         <p>We'd still love to help! Here are some ways you can follow up:</p>
         <ul>
           <li>Call us back at your earliest convenience</li>
           <li>Reply to this email to let us know your availability</li>
-          <li>Check our website for available time slots</li>
+          <li>Use the confirmation link above to accept the earlier slot</li>
         </ul>
         
         <p style="margin-top: 24px; font-size: 14px; color: #666;">
@@ -89,10 +104,13 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
 
       We recently tried to give you a call about your ${slot?.title || "appointment"}, but we weren't able to reach you.
 
+      An earlier appointment is currently available for you. Open this link to confirm the new appointment and choose which of your next appointments should be cancelled:
+      ${confirmationLink}
+
       We'd still love to help! Here are some ways you can follow up:
       - Call us back at your earliest convenience
       - Reply to this email to let us know your availability
-      - Check our website for available time slots
+      - Use the confirmation link above to accept the earlier slot
 
       Appointment Details:
       ${slot?.title ? `Title: ${slot.title}` : ''}

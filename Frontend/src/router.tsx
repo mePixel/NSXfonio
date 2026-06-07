@@ -15,6 +15,11 @@ import { getCurrentSession } from "@/lib/auth"
 import { DashboardPage } from "@/routes/dashboard"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
+import { PublicReschedulerPage } from "@/routes/public-rescheduler"
+import {
+  publicReschedulerAction,
+  publicReschedulerLoader,
+} from "@/routes/public-rescheduler-data"
 import { ReschedulerPage } from "@/routes/rescheduler"
 import { reschedulerAction, reschedulerLoader } from "@/routes/rescheduler-data"
 import { settingsAction, settingsLoader } from "@/routes/settings-data"
@@ -81,6 +86,14 @@ export const router = createBrowserRouter([
     loader: onboardingLoader,
     hydrateFallbackElement: <LoadingPage />,
     element: <OnboardingPage />,
+  },
+  {
+    path: "/reschedule-offer/:offerId",
+    loader: publicReschedulerLoader,
+    action: publicReschedulerAction,
+    hydrateFallbackElement: <LoadingPage />,
+    element: <PublicReschedulerPage />,
+    errorElement: <RouteErrorPage />,
   },
   {
     id: "root",
