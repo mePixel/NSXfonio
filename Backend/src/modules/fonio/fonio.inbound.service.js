@@ -7,6 +7,7 @@ import { listUpcomingAppointmentsForCustomer } from "../appointments/appointment
 import { transitionStatus } from "../appointments/status.service.js";
 import { createAppointment } from "../appointments/appointments.service.js";
 import { createCustomer, findCustomerByPhone } from "../customers/customers.service.js";
+import { getReschedulerCandidateWindow } from "../settings/settings.service.js";
 import { createWaitlistEntryForCustomer, findWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
 function normalizePhone(value) {
@@ -475,7 +476,7 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
   };
 }
 
-export async function listFonioUpcomingAppointments(payload, { now = new Date(), limit = 5 } = {}) {
+export async function listFonioUpcomingAppointments(payload, { now = new Date(), limit = null } = {}) {
   const client = await resolveClient(payload);
   const clientId = client?.id ?? null;
   const callerPhone = getRequestedPhone(payload);
@@ -511,6 +512,8 @@ export async function listFonioUpcomingAppointments(payload, { now = new Date(),
     };
   }
 
+  const configuredLimit = await getReschedulerCandidateWindow();
+  const effectiveLimit = Number.isInteger(limit) && limit > 0 ? limit : configuredLimit;
   const appointments = await listUpcomingAppointmentsForCustomer(clientId, customer.id, { now });
 
   return {
@@ -525,7 +528,7 @@ export async function listFonioUpcomingAppointments(payload, { now = new Date(),
       firstName: customer.firstName,
       lastName: customer.lastName
     },
-    appointments: appointments.slice(0, limit).map((appointment) => ({
+    appointments: appointments.slice(0, effectiveLimit).map((appointment) => ({
       id: appointment.id,
       title: appointment.title,
       startsAt: appointment.startsAt,

@@ -17,6 +17,7 @@ import { LoginPage } from "@/routes/login"
 import { ReschedulerPage } from "@/routes/rescheduler"
 import { reschedulerAction, reschedulerLoader } from "@/routes/rescheduler-data"
 import { settingsAction, settingsLoader } from "@/routes/settings-data"
+import { SettingsPage } from "@/routes/settings"
 import { OnboardingPage } from "@/routes/onboarding"
 
 function getRedirectTarget(request: Request) {
@@ -120,7 +121,7 @@ export const router = createBrowserRouter([
         path: "settings",
         loader: settingsLoader,
         action: settingsAction,
-        element: <Navigate to="/appointments" replace />,
+        element: <SettingsPage />,
       },
       {
         path: "*",

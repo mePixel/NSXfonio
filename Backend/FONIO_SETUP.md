@@ -243,6 +243,12 @@ When a cancellation releases a slot, the backend triggers an outbound waitlist c
 
 The Fonio agent should branch on `scenario === "cancelled_slot_waitlist_offer"` and use `openingPrompt`, `name`, `slotStartsAt`, and `slotEndsAt` in the first turn.
 
+If the patient wants the earlier slot, the agent must explicitly confirm the reschedule decision and identify which existing appointment should be cancelled:
+
+- if the patient has one upcoming appointment, the agent should confirm that this appointment will be replaced
+- if the patient has multiple upcoming appointments, the agent must ask which appointment should be cancelled before confirming acceptance
+- the outbound webhook payload should include an explicit accept/decline decision and, when needed, the selected appointment id to cancel
+
 For looking up the caller's cancellable appointments during the call, use:
 
 - `POST /api/fonio/inbound-upcoming-appointments`
