@@ -51,7 +51,7 @@ const stateLabels: Record<ReschedulerState, string> = {
   calling: "Calling",
   filled: "Filled",
   aborted: "Aborted",
-  failed: "Not responded",
+  failed: "Couldn't fulfill",
 };
 
 const candidateStateLabels: Record<ReschedulerCandidate["state"], string> = {

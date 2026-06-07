@@ -19,6 +19,7 @@ import { autoStartOfferCycle } from "../waitlist/offers.service.js";
 import { deleteWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
 const ACTIVE_FLOW_STATES = ["pending", "calling"];
+const ACTIVE_OFFER_STATUSES = ["pending", "calling", "whatsapp_sent"];
 const replacementCustomers = alias(customers, "replacement_customers");
 
 function mapOfferStatusToCandidateState(status) {
@@ -32,7 +33,7 @@ function mapOfferStatusToCandidateState(status) {
 function getFlowStateFromOfferResult(result) {
   if (!result) return "pending";
   if (result.started) return "calling";
-  if (result.status === "failed") return "failed";
+  if (result.status === "failed" || result.status === "skipped") return "failed";
   return "pending";
 }
 
@@ -103,6 +104,7 @@ export async function recordCancellationFlow(clientId, appointment, offerResult,
       originalSlotId: appointment.slotId ?? null,
       state,
       startedAt: state === "calling" || state === "failed" ? now : null,
+      completedAt: state === "failed" ? now : null,
       updatedAt: now
     })
     .onConflictDoUpdate({
@@ -113,7 +115,7 @@ export async function recordCancellationFlow(clientId, appointment, offerResult,
         replacementAppointmentId: null,
         replacementCustomerId: null,
         startedAt: state === "calling" || state === "failed" ? now : null,
-        completedAt: null,
+        completedAt: state === "failed" ? now : null,
         abortedAt: null,
         updatedAt: now
       }
@@ -950,6 +952,30 @@ async function syncCandidatesFromOffers(clientId, flow) {
   }
 }
 
+async function markFlowFailedIfNoActiveOffersRemain(clientId, flow) {
+  if (!flow.originalSlotId) return;
+  if (!isActiveFlowState(flow.state)) return;
+
+  const offers = await db
+    .select({ status: waitlistOffers.status })
+    .from(waitlistOffers)
+    .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.slotId, flow.originalSlotId)));
+
+  const hasAcceptedOffer = offers.some((offer) => offer.status === "accepted");
+  const hasActiveOffer = offers.some((offer) => ACTIVE_OFFER_STATUSES.includes(offer.status));
+  if (hasAcceptedOffer || hasActiveOffer) return;
+
+  const now = new Date();
+  await db
+    .update(reschedulerFlows)
+    .set({
+      state: "failed",
+      completedAt: now,
+      updatedAt: now
+    })
+    .where(and(eq(reschedulerFlows.clientId, clientId), eq(reschedulerFlows.id, flow.id)));
+}
+
 export async function listReschedulerFlows(clientId) {
   const flowRows = await db
     .select()
@@ -959,6 +985,7 @@ export async function listReschedulerFlows(clientId) {
 
   for (const flow of flowRows) {
     await syncCandidatesFromOffers(clientId, flow);
+    await markFlowFailedIfNoActiveOffersRemain(clientId, flow);
   }
 
   const rows = await db
