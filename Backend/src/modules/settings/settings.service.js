@@ -3,6 +3,8 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
 import { fonioApiKeys } from "../../db/schema.js";
 
+export const DEFAULT_RESCHEDULER_CANDIDATE_WINDOW = 3;
+
 function hashApiKey(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -79,6 +81,48 @@ function toApiKeySummary(row) {
     createdAt: row.createdAt,
     revokedAt: row.revokedAt
   };
+}
+
+export async function ensureAppointmentSettingsStorage() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "appointment_settings" (
+      "id" text PRIMARY KEY NOT NULL,
+      "time_slot_size" integer NOT NULL,
+      "working_days" text NOT NULL,
+      "office_hours_start" text DEFAULT '08:00' NOT NULL,
+      "office_hours_end" text DEFAULT '17:00' NOT NULL,
+      "rescheduler_candidate_window" integer DEFAULT ${DEFAULT_RESCHEDULER_CANDIDATE_WINDOW} NOT NULL,
+      "created_at" timestamp NOT NULL,
+      "updated_at" timestamp NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE "appointment_settings"
+    ADD COLUMN IF NOT EXISTS "rescheduler_candidate_window" integer
+    DEFAULT ${DEFAULT_RESCHEDULER_CANDIDATE_WINDOW} NOT NULL
+  `);
+}
+
+export async function getReschedulerCandidateWindow() {
+  await ensureAppointmentSettingsStorage();
+
+  const { rows } = await pool.query(
+    `
+      SELECT "rescheduler_candidate_window"
+      FROM "appointment_settings"
+      WHERE "id" = $1
+      LIMIT 1
+    `,
+    ["default"]
+  );
+
+  const rawValue = Number(rows[0]?.rescheduler_candidate_window);
+  if (!Number.isInteger(rawValue) || rawValue < 1) {
+    return DEFAULT_RESCHEDULER_CANDIDATE_WINDOW;
+  }
+
+  return rawValue;
 }
 
 export async function getActiveFonioApiKey(clientId) {

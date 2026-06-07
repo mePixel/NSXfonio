@@ -278,6 +278,12 @@ In the Fonio outbound first-message field, use the context-scoped variable:
 {{firstMessage}}
 ```
 
+If the patient wants the earlier slot, the agent must explicitly confirm the reschedule decision and identify which existing appointment should be cancelled:
+
+- if the patient has one upcoming appointment, the agent should confirm that this appointment will be replaced
+- if the patient has multiple upcoming appointments, the agent must ask which appointment should be cancelled before confirming acceptance
+- the outbound webhook payload should include an explicit accept/decline decision and, when needed, the selected appointment id to cancel
+
 When the patient clearly accepts the offered appointment, Fonio must call:
 
 `POST /api/fonio/rescheduler/accept`
@@ -294,6 +300,7 @@ Request body:
 ```json
 {
   "offerId": "{{offerId}}",
+  "selectedAppointmentId": "<required when the patient has multiple upcoming appointments>",
   "callId": "{{callId}}",
   "summary": "Patient accepted the earlier appointment.",
   "formattedPlainTranscript": "<optional transcript>"
@@ -308,6 +315,8 @@ Response:
   "mode": "rescheduler_accept",
   "alreadyFilled": false,
   "appointmentId": "replacement-appointment-id",
+  "replacementAppointmentId": "replacement-appointment-id",
+  "cancelledAppointmentId": "cancelled-appointment-id",
   "customerId": "customer-id",
   "slotId": "slot-1",
   "startsAt": "2026-06-23T09:00:00.000Z",
