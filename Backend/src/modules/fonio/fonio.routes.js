@@ -1,31 +1,19 @@
 import { Router } from "express";
-import { env } from "../../config/env.js";
+import { requireFonioApiKey } from "../../lib/middleware.js";
 import { isoDate, str } from "../../lib/sanitize.js";
 import {
   buildInboundContext,
   handleInboundAppointmentWebhook,
+  handleInboundCancellation,
+  handleInboundWaitlist,
+  listFonioUpcomingAppointments,
   searchFonioAvailableSlots,
   listFonioAvailableSlots
 } from "./fonio.inbound.service.js";
 
 export const fonioRouter = Router();
 
-function requireFonioSecret(req, res, next) {
-  if (!env.fonioSharedSecret) {
-    next();
-    return;
-  }
-
-  const provided = req.header("x-fonio-secret");
-  if (provided !== env.fonioSharedSecret) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-
-  next();
-}
-
-fonioRouter.use(requireFonioSecret);
+fonioRouter.use(requireFonioApiKey);
 
 fonioRouter.post("/inbound-context", async (req, res, next) => {
   try {
@@ -34,7 +22,10 @@ fonioRouter.post("/inbound-context", async (req, res, next) => {
       ? maxSlotsRaw
       : 3;
 
-    const context = await buildInboundContext(req.body ?? {}, { maxSlots });
+    const context = await buildInboundContext(
+      { ...(req.body ?? {}), authenticatedClientId: req.fonioAuth.clientId },
+      { maxSlots }
+    );
     res.json(context);
   } catch (error) {
     next(error);
@@ -43,7 +34,10 @@ fonioRouter.post("/inbound-context", async (req, res, next) => {
 
 fonioRouter.post("/inbound-booking", async (req, res, next) => {
   try {
-    const result = await handleInboundAppointmentWebhook(req.body ?? {});
+    const result = await handleInboundAppointmentWebhook({
+      ...(req.body ?? {}),
+      authenticatedClientId: req.fonioAuth.clientId
+    });
 
     if (result.handled) {
       res.status(201).json(result);
@@ -69,7 +63,10 @@ fonioRouter.post("/inbound-search-slots", async (req, res, next) => {
       ? maxSlotsRaw
       : 6;
 
-    const result = await searchFonioAvailableSlots(req.body ?? {}, { maxSlots });
+    const result = await searchFonioAvailableSlots(
+      { ...(req.body ?? {}), authenticatedClientId: req.fonioAuth.clientId },
+      { maxSlots }
+    );
 
     if (result.handled) {
       res.json(result);
@@ -87,9 +84,77 @@ fonioRouter.post("/inbound-search-slots", async (req, res, next) => {
   }
 });
 
+fonioRouter.post("/inbound-upcoming-appointments", async (req, res, next) => {
+  try {
+    const result = await listFonioUpcomingAppointments({
+      ...(req.body ?? {}),
+      authenticatedClientId: req.fonioAuth.clientId
+    });
+
+    if (result.handled) {
+      res.json(result);
+      return;
+    }
+
+    const statusByReason = {
+      unresolved_client: 422
+    };
+
+    res.status(statusByReason[result.reason] ?? 422).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+fonioRouter.post("/inbound-cancel", async (req, res, next) => {
+  try {
+    const result = await handleInboundCancellation({
+      ...(req.body ?? {}),
+      authenticatedClientId: req.fonioAuth.clientId
+    });
+
+    if (result.handled) {
+      res.json(result);
+      return;
+    }
+
+    const statusByReason = {
+      unresolved_client: 422,
+      missing_appointment_id: 422,
+      appointment_not_found_for_caller: 404
+    };
+
+    res.status(statusByReason[result.reason] ?? 422).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+fonioRouter.post("/inbound-waitlist", async (req, res, next) => {
+  try {
+    const result = await handleInboundWaitlist({
+      ...(req.body ?? {}),
+      authenticatedClientId: req.fonioAuth.clientId
+    });
+
+    if (result.handled) {
+      res.status(201).json(result);
+      return;
+    }
+
+    const statusByReason = {
+      unresolved_client: 422
+    };
+
+    res.status(statusByReason[result.reason] ?? 422).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 fonioRouter.get("/availability", async (req, res, next) => {
   try {
-    const clientId = str(req.query.clientId, { required: true, max: 100 });
+    const clientId = req.fonioAuth.clientId ?? str(req.query.clientId, { required: true, max: 100 });
     if (!clientId) {
       res.status(400).json({ error: "clientId is required" });
       return;

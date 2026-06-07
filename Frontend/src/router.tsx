@@ -1,6 +1,7 @@
 import { createBrowserRouter, redirect } from "react-router"
 
 import App from "@/App"
+import { RouteErrorPage } from "@/components/route-error"
 import { AppointmentsPage } from "@/routes/appointments"
 import {
   appointmentSettingsAction,
@@ -14,6 +15,10 @@ import { getCurrentSession } from "@/lib/auth"
 import { DashboardPage } from "@/routes/dashboard"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
+import { ReschedulerPage } from "@/routes/rescheduler"
+import { reschedulerAction, reschedulerLoader } from "@/routes/rescheduler-data"
+import { settingsAction, settingsLoader } from "@/routes/settings-data"
+import { OnboardingPage } from "@/routes/onboarding"
 
 function getRedirectTarget(request: Request) {
   const url = new URL(request.url)
@@ -26,6 +31,13 @@ async function protectedLoader({ request }: { request: Request }) {
   if (!session) {
     const redirectTo = encodeURIComponent(getRedirectTarget(request))
     throw redirect(`/login?redirectTo=${redirectTo}`)
+  }
+
+  if (!session.user.clientId) {
+    const url = new URL(request.url)
+    if (url.pathname !== "/onboarding") {
+      throw redirect("/onboarding")
+    }
   }
 
   return session
@@ -41,12 +53,33 @@ async function loginLoader() {
   return null
 }
 
+async function onboardingLoader() {
+  const session = await getCurrentSession()
+
+  if (!session) {
+    throw redirect("/login")
+  }
+
+  if (session.user.clientId) {
+    throw redirect("/")
+  }
+
+  return session
+}
+
 export const router = createBrowserRouter([
   {
     path: "/login",
     loader: loginLoader,
     hydrateFallbackElement: <LoadingPage />,
     element: <LoginPage />,
+    errorElement: <RouteErrorPage />,
+  },
+  {
+    path: "/onboarding",
+    loader: onboardingLoader,
+    hydrateFallbackElement: <LoadingPage />,
+    element: <OnboardingPage />,
   },
   {
     id: "root",
@@ -54,6 +87,7 @@ export const router = createBrowserRouter([
     loader: protectedLoader,
     hydrateFallbackElement: <LoadingPage />,
     element: <App />,
+    errorElement: <RouteErrorPage />,
     children: [
       {
         index: true,
@@ -76,6 +110,18 @@ export const router = createBrowserRouter([
         loader: clientsLoader,
         action: clientsAction,
         element: <ClientsPage />,
+      },
+      {
+        path: "rescheduler",
+        loader: reschedulerLoader,
+        action: reschedulerAction,
+        element: <ReschedulerPage />,
+      },
+      {
+        path: "settings",
+        loader: settingsLoader,
+        action: settingsAction,
+        element: <DashboardPage />,
       },
       {
         path: "*",

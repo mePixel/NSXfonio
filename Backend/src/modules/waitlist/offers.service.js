@@ -1,14 +1,16 @@
 import { randomUUID } from "crypto";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { communicationLogs, waitingListEntries, waitlistOffers } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
 import { getCustomer } from "../customers/customers.service.js";
-import { triggerOutboundCall } from "../fonio/fonio.client.js";
+import { assertOutboundCallConfig, triggerOutboundCall } from "../fonio/fonio.client.js";
 import { getSlot } from "../slots/slots.service.js";
 
-const ACTIVE_STATUSES  = ["pending", "calling", "call_no_answer", "whatsapp_sent"];
+const ACTIVE_STATUSES  = ["pending", "calling", "whatsapp_sent"];
 const DEFAULT_DEADLINE_MINUTES = 60;
+const CANCELLED_SLOT_OPENING_PROMPT =
+  "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept.";
 
 // Finds the next waitlist entry that has not yet been offered (or all previous offers are terminal).
 async function getNextEntry(clientId, slotId) {
@@ -25,14 +27,121 @@ async function getNextEntry(clientId, slotId) {
     .from(waitlistOffers)
     .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.slotId, slotId)));
 
+  const offerIds = existingOffers.map((offer) => offer.id);
+  const sentCallLogs = offerIds.length
+    ? await db
+      .select({ waitlistOfferId: communicationLogs.waitlistOfferId })
+      .from(communicationLogs)
+      .where(and(
+        eq(communicationLogs.clientId, clientId),
+        eq(communicationLogs.channel, "call"),
+        eq(communicationLogs.direction, "outbound"),
+        eq(communicationLogs.status, "sent"),
+        inArray(communicationLogs.waitlistOfferId, offerIds)
+      ))
+    : [];
+  const sentCallOfferIds = new Set(sentCallLogs.map((log) => log.waitlistOfferId));
+
+  const activeOffersOtherSlots = await db
+    .select()
+    .from(waitlistOffers)
+    .where(and(
+      eq(waitlistOffers.clientId, clientId),
+      ne(waitlistOffers.slotId, slotId),
+      inArray(waitlistOffers.status, ACTIVE_STATUSES)
+    ));
+
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+
   for (const entry of entries) {
     const entryOffers = existingOffers.filter(o => o.waitingListEntryId === entry.id);
     const hasActive   = entryOffers.some(o => ACTIVE_STATUSES.includes(o.status));
     const hasAccepted = entryOffers.some(o => o.status === "accepted");
-    if (!hasActive && !hasAccepted) return entry;
+    const hasTriedThisSlot = entryOffers.some((offer) =>
+      ["call_no_answer", "declined", "accepted"].includes(offer.status)
+      || (offer.status === "timed_out" && sentCallOfferIds.has(offer.id))
+    );
+    const hasOtherActiveOffer = activeOffersOtherSlots.some((offer) => {
+      const offeredEntry = entryById.get(offer.waitingListEntryId);
+      return offeredEntry?.customerId === entry.customerId;
+    });
+
+    if (!hasActive && !hasAccepted && !hasTriedThisSlot && !hasOtherActiveOffer) return entry;
   }
 
   return null;
+}
+
+export async function moveWaitlistEntryToEnd(clientId, waitingListEntryId) {
+  const [entry] = await db
+    .select()
+    .from(waitingListEntries)
+    .where(and(
+      eq(waitingListEntries.clientId, clientId),
+      eq(waitingListEntries.id, waitingListEntryId)
+    ));
+
+  if (!entry) return null;
+
+  const [lastEntry] = await db
+    .select({ position: waitingListEntries.position })
+    .from(waitingListEntries)
+    .where(eq(waitingListEntries.clientId, clientId))
+    .orderBy(desc(waitingListEntries.position))
+    .limit(1);
+
+  const nextPosition = lastEntry?.position ?? entry.position;
+  if (entry.position >= nextPosition) {
+    return entry;
+  }
+
+  return db.transaction(async (tx) => {
+    await tx
+      .update(waitingListEntries)
+      .set({
+        position: sql`${waitingListEntries.position} - 1`,
+        updatedAt: new Date()
+      })
+      .where(and(
+        eq(waitingListEntries.clientId, clientId),
+        gt(waitingListEntries.position, entry.position)
+      ));
+
+    const [updated] = await tx
+      .update(waitingListEntries)
+      .set({
+        position: nextPosition,
+        updatedAt: new Date()
+      })
+      .where(eq(waitingListEntries.id, entry.id))
+      .returning();
+
+    return updated;
+  });
+}
+
+async function expireStaleActiveOffers(clientId, slotId) {
+  await db
+    .update(waitlistOffers)
+    .set({ status: "timed_out", updatedAt: new Date() })
+    .where(and(
+      eq(waitlistOffers.clientId, clientId),
+      eq(waitlistOffers.slotId, slotId),
+      inArray(waitlistOffers.status, ACTIVE_STATUSES),
+      lt(waitlistOffers.responseDeadlineAt, new Date())
+    ));
+}
+
+function buildCancelledSlotCallContext(slot, customer, offer) {
+  return {
+    name: `${customer.firstName} ${customer.lastName}`,
+    slotId: slot.id,
+    slotStartsAt: slot.startsAt?.toISOString?.() ?? slot.startsAt,
+    slotEndsAt: slot.endsAt?.toISOString?.() ?? slot.endsAt,
+    offerId: offer.id,
+    scenario: "cancelled_slot_waitlist_offer",
+    openingPrompt: CANCELLED_SLOT_OPENING_PROMPT
+  };
 }
 
 async function callEntry(clientId, slot, entry, offer) {
@@ -57,11 +166,7 @@ async function callEntry(clientId, slot, entry, offer) {
   try {
     result = await triggerOutboundCall({
       toNumber: customer.phone,
-      context: {
-        name: `${customer.firstName} ${customer.lastName}`,
-        slotId: slot.id,
-        offerId: offer.id
-      }
+      context: buildCancelledSlotCallContext(slot, customer, offer)
     });
   } catch (error) {
     await db.update(communicationLogs)
@@ -86,6 +191,8 @@ export async function startOfferCycle(clientId, slotId, { userId = null, respons
   if (!slot)                    throw Object.assign(new Error("Slot not found"), { status: 404 });
   if (slot.status !== "available") throw Object.assign(new Error("Slot is not available"), { status: 409 });
 
+  await expireStaleActiveOffers(clientId, slotId);
+
   // Block if an active offer already exists for this slot
   const [activeOffer] = await db
     .select()
@@ -99,6 +206,8 @@ export async function startOfferCycle(clientId, slotId, { userId = null, respons
 
   const entry = await getNextEntry(clientId, slotId);
   if (!entry) throw Object.assign(new Error("Waitlist is empty or all entries have been tried"), { status: 404 });
+
+  assertOutboundCallConfig();
 
   const responseDeadlineAt = new Date(Date.now() + responseDeadlineMinutes * 60 * 1000);
 
@@ -114,7 +223,14 @@ export async function startOfferCycle(clientId, slotId, { userId = null, respons
     })
     .returning();
 
-  await callEntry(clientId, slot, entry, offer);
+  try {
+    await callEntry(clientId, slot, entry, offer);
+  } catch (error) {
+    await db.update(waitlistOffers)
+      .set({ status: "timed_out" })
+      .where(eq(waitlistOffers.id, offer.id));
+    throw error;
+  }
 
   await writeAuditLog({
     clientId,
@@ -181,4 +297,30 @@ export async function advanceOfferCycle(clientId, offerId, { userId = null } = {
 
 export function listOffers(clientId) {
   return db.select().from(waitlistOffers).where(eq(waitlistOffers.clientId, clientId));
+}
+
+export async function autoStartOfferCycle(clientId, slotId, options = {}) {
+  try {
+    const offer = await startOfferCycle(clientId, slotId, options);
+    return { started: true, offer };
+  } catch (error) {
+    if (error?.status === 404 || error?.status === 409) {
+      return {
+        started: false,
+        status: "skipped",
+        reason: error?.message ?? "No eligible waitlist offer"
+      };
+    }
+
+    console.error("[waitlist] automatic offer cycle failed", {
+      clientId,
+      slotId,
+      error: error?.message ?? error
+    });
+    return {
+      started: false,
+      status: "failed",
+      reason: error?.message ?? "Automatic offer cycle failed"
+    };
+  }
 }

@@ -19,6 +19,20 @@ export type Appointment = {
   client: Client;
 };
 
+export type WaitlistOfferResult =
+  | {
+      started: true;
+      offer: {
+        id: string;
+        status: string;
+      };
+    }
+  | {
+      started: false;
+      status: "skipped" | "failed";
+      reason: string;
+    };
+
 export type AppointmentSettings = {
   id: string;
   timeSlotSize: number;
@@ -34,6 +48,7 @@ export type AppointmentField =
   | "timeSlot"
   | "clientId"
   | "moreInfo"
+  | "joinWaitlist"
   | "newClient.firstName"
   | "newClient.lastName"
   | "newClient.telephoneNumber"
@@ -144,6 +159,7 @@ function appointmentBodyFromFormData(formData: FormData) {
     appointmentDate: String(formData.get("appointmentDate") ?? "").trim(),
     timeSlot: String(formData.get("timeSlot") ?? "").trim(),
     moreInfo: String(formData.get("moreInfo") ?? "").trim(),
+    joinWaitlist: String(formData.get("joinWaitlist") ?? "") === "on",
     firstName: String(formData.get("firstName") ?? "").trim(),
     lastName: String(formData.get("lastName") ?? "").trim(),
     telephoneNumber: String(formData.get("telephoneNumber") ?? "").trim(),
@@ -180,11 +196,17 @@ export async function createAppointment(formData: FormData) {
   }
 
   return {
-    ok: true as const,
-    intent: "createAppointment" as const,
-    message: "Appointment created.",
-    appointments: ((await response.json()) as { appointments: Appointment[] })
-      .appointments,
+      ok: true as const,
+      intent: "createAppointment" as const,
+      message: "Appointment created.",
+      ...((await response.json()) as {
+        appointments: Appointment[];
+        waitlist?: {
+          entryId: string;
+          created: boolean;
+          position: number;
+        } | null;
+      }),
   };
 }
 
@@ -224,8 +246,10 @@ export async function cancelAppointment(formData: FormData) {
     ok: true as const,
     intent: "cancelAppointment" as const,
     message: "Appointment cancelled.",
-    appointments: ((await response.json()) as { appointments: Appointment[] })
-      .appointments,
+    ...((await response.json()) as {
+      appointments: Appointment[];
+      waitlistOffer?: WaitlistOfferResult | null;
+    }),
   };
 }
 

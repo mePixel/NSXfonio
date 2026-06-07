@@ -27,6 +27,7 @@ export type AuthSession = {
     emailVerified: boolean
     name?: string | null
     image?: string | null
+    clientId?: string | null
   }
 }
 

@@ -2,7 +2,23 @@ import { env } from "../../config/env.js";
 
 const FONIO_URL = "https://app.fonio.ai/api/public/v1/outbound_call";
 
+export function getOutboundCallConfigIssue() {
+  if (!env.fonioApiKey) return "Missing API_FONIO";
+  if (!env.fonioFromNumber) return "Missing FONIO_FROM_NUMBER";
+  if (!env.fonioAgentId) return "Missing FONIO_AGENT_ID";
+  return null;
+}
+
+export function assertOutboundCallConfig() {
+  const issue = getOutboundCallConfigIssue();
+  if (issue) {
+    throw Object.assign(new Error(issue), { status: 503 });
+  }
+}
+
 export async function triggerOutboundCall({ toNumber, context = {} }) {
+  assertOutboundCallConfig();
+
   const response = await fetch(FONIO_URL, {
     method: "POST",
     headers: {

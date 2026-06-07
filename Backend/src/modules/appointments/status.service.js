@@ -2,6 +2,8 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { appointments, slots } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
+import { autoStartOfferCycle } from "../waitlist/offers.service.js";
+import { recordCancellationFlow } from "../rescheduler/rescheduler.service.js";
 import { getAppointment } from "./appointments.service.js";
 
 // Enforces the allowed transition matrix from SYSTEMS.md.
@@ -27,10 +29,14 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
     );
   }
 
-  return db.transaction(async (tx) => {
+  const updated = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(appointments)
-      .set({ status: toStatus, updatedAt: new Date() })
+      .set({
+        status: toStatus,
+        ...(toStatus === "cancelled" ? { cancelReason: reason } : {}),
+        updatedAt: new Date()
+      })
       .where(and(eq(appointments.clientId, clientId), eq(appointments.id, appointmentId)))
       .returning();
 
@@ -58,4 +64,19 @@ export async function transitionStatus(clientId, appointmentId, toStatus, { user
 
     return updated;
   });
+
+  let waitlistOffer = null;
+  if (toStatus === "cancelled" && updated?.slotId) {
+    waitlistOffer = await autoStartOfferCycle(clientId, updated.slotId, { userId });
+  }
+
+  if (toStatus === "cancelled") {
+    await recordCancellationFlow(clientId, updated, waitlistOffer, { userId });
+  }
+
+  if (waitlistOffer) {
+    return { ...updated, waitlistOffer };
+  }
+
+  return updated;
 }

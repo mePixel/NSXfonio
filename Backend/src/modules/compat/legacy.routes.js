@@ -1,9 +1,12 @@
 import { randomUUID } from "crypto";
 import { Router } from "express";
-import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, ne } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
-import { appointments, customers, slots } from "../../db/schema.js";
+import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
+import { transitionStatus } from "../appointments/status.service.js";
+import { createWaitlistEntryForCustomer } from "../waitlist/waitlist.service.js";
+import { listWaitlistEntriesByCustomerIds } from "../waitlist/waitlist.service.js";
 
 const DEFAULT_APPOINTMENT_SETTINGS_ID = "default";
 const DEFAULT_TIME_SLOT_SIZE = 30;
@@ -11,6 +14,7 @@ const DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5];
 const DEFAULT_OFFICE_HOURS_START = "08:00";
 const DEFAULT_OFFICE_HOURS_END = "17:00";
 const SUPPORTED_TIME_SLOT_SIZES = new Set([15, 30, 60]);
+const SLOT_GENERATION_DAYS = 30;
 
 export const legacyRouter = Router();
 
@@ -50,7 +54,7 @@ function validateClientPayload(body, prefix = "") {
   };
 }
 
-function mapCustomerToLegacyClient(row) {
+function mapCustomerToLegacyClient(row, waitlistEntry = null) {
   return {
     id: row.id,
     firstName: row.firstName,
@@ -58,6 +62,12 @@ function mapCustomerToLegacyClient(row) {
     telephoneNumber: row.phone ?? row.whatsappPhone ?? "",
     email: row.email ?? "",
     description: row.notes ?? "",
+    waitlist: {
+      isOnWaitlist: Boolean(waitlistEntry),
+      entryId: waitlistEntry?.id ?? null,
+      position: waitlistEntry?.position ?? null,
+      notes: waitlistEntry?.notes ?? null
+    },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
@@ -147,6 +157,14 @@ function addMinutes(date, minutes) {
   return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
+function addDays(date, days) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
 function formatDate(date) {
   return [
     date.getFullYear(),
@@ -161,6 +179,18 @@ function formatTime(date) {
 
 async function ensureAppointmentSettings() {
   const now = new Date();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "appointment_settings" (
+      "id" text PRIMARY KEY NOT NULL,
+      "time_slot_size" integer NOT NULL,
+      "working_days" text NOT NULL,
+      "office_hours_start" text DEFAULT '08:00' NOT NULL,
+      "office_hours_end" text DEFAULT '17:00' NOT NULL,
+      "created_at" timestamp NOT NULL,
+      "updated_at" timestamp NOT NULL
+    )
+  `);
 
   await pool.query(
     `
@@ -204,6 +234,182 @@ async function ensureAppointmentSettings() {
   );
 
   return rows[0];
+}
+
+async function ensureClientSchedules(clientId, settings) {
+  const existingSchedules = await db
+    .select()
+    .from(schedules)
+    .where(eq(schedules.clientId, clientId))
+    .orderBy(asc(schedules.createdAt));
+
+  const scheduleIdsByDay = new Map();
+
+  for (const dayOfWeek of settings.workingDays) {
+    const existing = existingSchedules.find((schedule) => schedule.dayOfWeek === dayOfWeek);
+
+    if (existing) {
+      const [updated] = await db
+        .update(schedules)
+        .set({
+          startTime: settings.officeHoursStart,
+          endTime: settings.officeHoursEnd,
+          slotDurationMinutes: settings.timeSlotSize,
+          updatedAt: new Date()
+        })
+        .where(eq(schedules.id, existing.id))
+        .returning();
+      scheduleIdsByDay.set(dayOfWeek, updated.id);
+      continue;
+    }
+
+    const id = randomUUID();
+    await db.insert(schedules).values({
+      id,
+      clientId,
+      dayOfWeek,
+      startTime: settings.officeHoursStart,
+      endTime: settings.officeHoursEnd,
+      slotDurationMinutes: settings.timeSlotSize
+    });
+    scheduleIdsByDay.set(dayOfWeek, id);
+  }
+
+  return scheduleIdsByDay;
+}
+
+async function syncSlotsFromAppointmentSettings(clientId, settings, { now = new Date(), horizonDays = SLOT_GENERATION_DAYS } = {}) {
+  const scheduleIdsByDay = await ensureClientSchedules(clientId, settings);
+  const rangeStart = startOfDay(now);
+  const rangeEnd = addDays(rangeStart, horizonDays);
+
+  const existingSlots = await db
+    .select()
+    .from(slots)
+    .where(and(
+      eq(slots.clientId, clientId),
+      gte(slots.startsAt, rangeStart),
+      lt(slots.startsAt, rangeEnd)
+    ))
+    .orderBy(asc(slots.startsAt));
+
+  const activeAppointments = await db
+    .select({
+      id: appointments.id,
+      slotId: appointments.slotId,
+      startsAt: appointments.startsAt,
+      endsAt: appointments.endsAt
+    })
+    .from(appointments)
+    .where(and(
+      eq(appointments.clientId, clientId),
+      gte(appointments.startsAt, rangeStart),
+      lt(appointments.startsAt, rangeEnd),
+      ne(appointments.status, "cancelled")
+    ))
+    .orderBy(asc(appointments.startsAt));
+
+  const slotsByRange = new Map(
+    existingSlots.map((slot) => [`${slot.startsAt.toISOString()}|${slot.endsAt.toISOString()}`, slot])
+  );
+
+  for (const appointment of activeAppointments) {
+    const key = `${appointment.startsAt.toISOString()}|${appointment.endsAt.toISOString()}`;
+    let slot = slotsByRange.get(key);
+
+    if (!slot) {
+      const id = randomUUID();
+      const scheduleId = scheduleIdsByDay.get(appointment.startsAt.getDay()) ?? null;
+      await db.insert(slots).values({
+        id,
+        clientId,
+        scheduleId,
+        startsAt: appointment.startsAt,
+        endsAt: appointment.endsAt,
+        status: "booked",
+        appointmentId: appointment.id
+      });
+      slot = {
+        id,
+        clientId,
+        scheduleId,
+        startsAt: appointment.startsAt,
+        endsAt: appointment.endsAt,
+        status: "booked",
+        appointmentId: appointment.id
+      };
+      slotsByRange.set(key, slot);
+    } else if (slot.status !== "booked" || slot.appointmentId !== appointment.id) {
+      const [updated] = await db
+        .update(slots)
+        .set({
+          status: "booked",
+          appointmentId: appointment.id,
+          updatedAt: new Date()
+        })
+        .where(eq(slots.id, slot.id))
+        .returning();
+      slot = updated;
+      slotsByRange.set(key, slot);
+    }
+
+    if (appointment.slotId !== slot.id) {
+      await db
+        .update(appointments)
+        .set({
+          slotId: slot.id,
+          updatedAt: new Date()
+        })
+        .where(eq(appointments.id, appointment.id));
+    }
+  }
+
+  const startMinutes = timeSlotToMinutes(settings.officeHoursStart);
+  const endMinutes = timeSlotToMinutes(settings.officeHoursEnd);
+  if (startMinutes === null || endMinutes === null || startMinutes >= endMinutes) {
+    return;
+  }
+
+  for (let dayOffset = 0; dayOffset < horizonDays; dayOffset += 1) {
+    const date = addDays(rangeStart, dayOffset);
+    const dayOfWeek = date.getDay();
+
+    if (!settings.workingDays.includes(dayOfWeek)) {
+      continue;
+    }
+
+    const scheduleId = scheduleIdsByDay.get(dayOfWeek) ?? null;
+
+    for (let minutes = startMinutes; minutes < endMinutes; minutes += settings.timeSlotSize) {
+      const startsAt = new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(minutes / 60), minutes % 60, 0, 0);
+      const endsAt = addMinutes(startsAt, settings.timeSlotSize);
+      const key = `${startsAt.toISOString()}|${endsAt.toISOString()}`;
+
+      if (slotsByRange.has(key)) {
+        continue;
+      }
+
+      const id = randomUUID();
+      await db.insert(slots).values({
+        id,
+        clientId,
+        scheduleId,
+        startsAt,
+        endsAt,
+        status: "available"
+      });
+
+      slotsByRange.set(key, {
+        id,
+        clientId,
+        scheduleId,
+        startsAt,
+        endsAt,
+        status: "available",
+        appointmentId: null
+      });
+    }
+  }
 }
 
 function validateAppointmentSettingsPayload(body) {
@@ -303,6 +509,7 @@ async function validateAppointmentPayload(clientId, body) {
     typeof body?.appointmentDate === "string" ? body.appointmentDate.trim() : "";
   const timeSlot = typeof body?.timeSlot === "string" ? body.timeSlot.trim() : "";
   const moreInfo = typeof body?.moreInfo === "string" ? body.moreInfo.trim() : "";
+  const joinWaitlist = body?.joinWaitlist === true || body?.joinWaitlist === "true" || body?.joinWaitlist === "on";
   const settings = normalizeAppointmentSettings(await ensureAppointmentSettings());
   const customerInput = await readCustomerForAppointment(clientId, body, errors);
 
@@ -327,6 +534,7 @@ async function validateAppointmentPayload(clientId, body) {
       appointmentDate,
       timeSlot,
       moreInfo,
+      joinWaitlist,
       settings,
       customerInput
     },
@@ -403,7 +611,15 @@ legacyRouter.get("/clients", requireAuth, requireClient, async (req, res, next) 
       .where(eq(customers.clientId, req.user.clientId))
       .orderBy(asc(customers.createdAt));
 
-    res.json({ clients: rows.map(mapCustomerToLegacyClient) });
+    const waitlistEntries = await listWaitlistEntriesByCustomerIds(
+      req.user.clientId,
+      rows.map((row) => row.id)
+    );
+    const waitlistByCustomerId = new Map(waitlistEntries.map((entry) => [entry.customerId, entry]));
+
+    res.json({
+      clients: rows.map((row) => mapCustomerToLegacyClient(row, waitlistByCustomerId.get(row.id) ?? null))
+    });
   } catch (error) {
     next(error);
   }
@@ -438,9 +654,64 @@ legacyRouter.post("/clients", requireAuth, requireClient, async (req, res, next)
   }
 });
 
-legacyRouter.get("/appointment-settings", requireAuth, requireClient, async (_req, res, next) => {
+legacyRouter.delete("/clients/:id", requireAuth, requireClient, async (req, res, next) => {
+  try {
+    const deleted = await db.transaction(async (tx) => {
+      const [customer] = await tx
+        .select()
+        .from(customers)
+        .where(and(eq(customers.clientId, req.user.clientId), eq(customers.id, req.params.id)));
+
+      if (!customer) {
+        return null;
+      }
+
+      const customerAppointments = await tx
+        .select({ id: appointments.id })
+        .from(appointments)
+        .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.customerId, req.params.id)));
+
+      const appointmentIds = customerAppointments.map((appointment) => appointment.id);
+
+      if (appointmentIds.length > 0) {
+        await tx
+          .update(slots)
+          .set({ status: "available", appointmentId: null, updatedAt: new Date() })
+          .where(and(eq(slots.clientId, req.user.clientId), inArray(slots.appointmentId, appointmentIds)));
+
+        await tx
+          .delete(appointments)
+          .where(and(eq(appointments.clientId, req.user.clientId), inArray(appointments.id, appointmentIds)));
+      }
+
+      await tx
+        .delete(customers)
+        .where(and(eq(customers.clientId, req.user.clientId), eq(customers.id, req.params.id)));
+
+      return {
+        customer,
+        deletedAppointmentCount: appointmentIds.length
+      };
+    });
+
+    if (!deleted) {
+      res.status(404).json({ error: "Client not found." });
+      return;
+    }
+
+    res.json({
+      clients: [mapCustomerToLegacyClient(deleted.customer)],
+      deletedAppointmentCount: deleted.deletedAppointmentCount
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+legacyRouter.get("/appointment-settings", requireAuth, requireClient, async (req, res, next) => {
   try {
     const settings = await ensureAppointmentSettings();
+    await syncSlotsFromAppointmentSettings(req.user.clientId, normalizeAppointmentSettings(settings));
 
     res.json({ settings: normalizeAppointmentSettings(settings) });
   } catch (error) {
@@ -494,6 +765,8 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
         now
       ]
     );
+
+    await syncSlotsFromAppointmentSettings(req.user.clientId, normalizeAppointmentSettings(rows[0]));
 
     res.json({ settings: normalizeAppointmentSettings(rows[0]) });
   } catch (error) {
@@ -650,8 +923,59 @@ legacyRouter.post("/appointments", requireAuth, requireClient, async (req, res, 
         })
         .returning();
 
+      const [existingSlot] = await tx
+        .select()
+        .from(slots)
+        .where(and(
+          eq(slots.clientId, req.user.clientId),
+          eq(slots.startsAt, startsAt),
+          eq(slots.endsAt, endsAt)
+        ))
+        .limit(1);
+
+      let createdSlot = existingSlot;
+
+      if (createdSlot && createdSlot.status !== "available") {
+        throw Object.assign(new Error("This time slot is not available."), { status: 409 });
+      }
+
+      if (createdSlot) {
+        const [updatedSlot] = await tx
+          .update(slots)
+          .set({
+            status: "booked",
+            appointmentId: createdAppointment.id,
+            updatedAt: new Date()
+          })
+          .where(eq(slots.id, createdSlot.id))
+          .returning();
+        createdSlot = updatedSlot;
+      } else {
+        const [insertedSlot] = await tx
+          .insert(slots)
+          .values({
+            id: randomUUID(),
+            clientId: req.user.clientId,
+            startsAt,
+            endsAt,
+            status: "booked",
+            appointmentId: createdAppointment.id
+          })
+          .returning();
+        createdSlot = insertedSlot;
+      }
+
+      const [linkedAppointment] = await tx
+        .update(appointments)
+        .set({
+          slotId: createdSlot.id,
+          updatedAt: new Date()
+        })
+        .where(eq(appointments.id, createdAppointment.id))
+        .returning();
+
       return {
-        ...createdAppointment,
+        ...(linkedAppointment ?? createdAppointment),
         customerId: customer.id,
         customerFirstName: customer.firstName,
         customerLastName: customer.lastName,
@@ -664,7 +988,27 @@ legacyRouter.post("/appointments", requireAuth, requireClient, async (req, res, 
       };
     });
 
-    res.status(201).json({ appointments: [mapAppointmentRow(appointment)] });
+    let waitlist = null;
+    if (values.joinWaitlist) {
+      const waitlistResult = await createWaitlistEntryForCustomer(
+        req.user.clientId,
+        appointment.customerId,
+        {
+          notes: `Wants earlier appointment times after booking ${values.appointmentDate} ${values.timeSlot}.`
+        }
+      );
+
+      waitlist = {
+        entryId: waitlistResult.entry.id,
+        created: waitlistResult.created,
+        position: waitlistResult.entry.position
+      };
+    }
+
+    res.status(201).json({
+      appointments: [mapAppointmentRow(appointment)],
+      waitlist
+    });
   } catch (error) {
     next(error);
   }
@@ -676,31 +1020,36 @@ legacyRouter.patch("/appointments/:id/cancel", requireAuth, requireClient, async
       typeof req.body?.cancellationReason === "string"
         ? req.body.cancellationReason.trim()
         : "";
-    const [appointment] = await db
-      .update(appointments)
-      .set({
-        status: "cancelled",
-        cancelReason: cancellationReason || null,
-        updatedAt: new Date()
-      })
-      .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.id, req.params.id)))
-      .returning();
+    const appointment = await transitionStatus(
+      req.user.clientId,
+      req.params.id,
+      "cancelled",
+      {
+        userId: req.user.id,
+        reason: cancellationReason || null
+      }
+    );
 
     if (!appointment) {
       res.status(404).json({ error: "Appointment not found." });
       return;
     }
 
-    if (appointment.slotId) {
+    if (appointment.cancelReason !== (cancellationReason || null)) {
       await db
-        .update(slots)
-        .set({ status: "available", appointmentId: null, updatedAt: new Date() })
-        .where(eq(slots.id, appointment.slotId));
+        .update(appointments)
+        .set({
+          cancelReason: cancellationReason || null,
+          updatedAt: new Date()
+        })
+        .where(and(eq(appointments.clientId, req.user.clientId), eq(appointments.id, req.params.id)));
     }
-
     const mappedAppointment = await readLegacyAppointment(req.user.clientId, req.params.id);
 
-    res.json({ appointments: [mappedAppointment] });
+    res.json({
+      appointments: [mappedAppointment],
+      waitlistOffer: appointment.waitlistOffer ?? null
+    });
   } catch (error) {
     next(error);
   }

@@ -3,8 +3,11 @@ import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { env } from "../../config/env.js";
 import { db } from "../../db/index.js";
 import { clients, communicationLogs, slots } from "../../db/schema.js";
+import { listUpcomingAppointmentsForCustomer } from "../appointments/appointments.service.js";
+import { transitionStatus } from "../appointments/status.service.js";
 import { createAppointment } from "../appointments/appointments.service.js";
 import { createCustomer, findCustomerByPhone } from "../customers/customers.service.js";
+import { createWaitlistEntryForCustomer, findWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
 function normalizePhone(value) {
   if (typeof value !== "string") return null;
@@ -16,6 +19,37 @@ function parseDate(value) {
   if (typeof value !== "string") return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
+function getSearchWindow(search, { now, defaultWindowDays }) {
+  const exactStart = parseDate(
+    search?.startsAt
+      ?? search?.requestedStartsAt
+      ?? search?.time
+      ?? search?.datetime
+      ?? null
+  );
+  const from = exactStart ?? parseDate(search?.from) ?? now;
+  const parsedTo = parseDate(
+    search?.endsAt
+      ?? search?.requestedEndsAt
+      ?? search?.to
+      ?? null
+  );
+
+  if (parsedTo && parsedTo > from) {
+    return { from, to: parsedTo };
+  }
+
+  if (exactStart || (parsedTo && parsedTo.getTime() === from.getTime())) {
+    return { from, to: addMinutes(from, 30) };
+  }
+
+  return { from, to: addMinutes(from, defaultWindowDays * 24 * 60) };
 }
 
 function timeOfDayMatches(date, timeOfDay) {
@@ -35,8 +69,35 @@ function getBookingPayload(payload) {
   return payload?.booking ?? payload?.appointment ?? payload?.intent?.booking ?? null;
 }
 
+function getCancellationPayload(payload) {
+  return payload?.cancellation ?? payload?.cancel ?? payload?.appointment ?? null;
+}
+
 function getCustomerPayload(payload) {
   return payload?.customer ?? payload?.caller ?? payload?.contact ?? null;
+}
+
+function getSearchAttemptCount(payload) {
+  const raw = payload?.search?.attemptCount
+    ?? payload?.search?.offerCount
+    ?? payload?.attemptCount
+    ?? payload?.offerCount
+    ?? 0;
+  const count = Number(raw);
+  return Number.isInteger(count) && count > 0 ? count : 0;
+}
+
+function wantsWaitlist(payload, booking) {
+  const value = booking?.joinWaitlist
+    ?? booking?.waitlist
+    ?? booking?.waitlistOptIn
+    ?? payload?.waitlist?.join
+    ?? payload?.waitlist?.optIn
+    ?? payload?.joinWaitlist
+    ?? null;
+
+  if (typeof value === "boolean") return value;
+  return ["true", "yes", "1", "on", "opt_in", "opt-in"].includes(String(value ?? "").toLowerCase());
 }
 
 function getRequestedPhone(payload) {
@@ -53,7 +114,8 @@ function getRequestedPhone(payload) {
 }
 
 function getResolvedClientIdFromPayload(payload) {
-  return payload?.context?.clientId
+  return payload?.authenticatedClientId
+    ?? payload?.context?.clientId
     ?? payload?.clientId
     ?? payload?.booking?.clientId
     ?? payload?.defaultValues?.clientId
@@ -165,6 +227,37 @@ async function findAvailableSlot(clientId, booking) {
   return slot ?? null;
 }
 
+async function findRequestedSlot(clientId, booking) {
+  const directSlotId = booking?.slotId ?? booking?.slot?.id ?? null;
+  if (directSlotId) {
+    const [slot] = await db
+      .select()
+      .from(slots)
+      .where(and(
+        eq(slots.clientId, clientId),
+        eq(slots.id, directSlotId)
+      ));
+    return slot ?? null;
+  }
+
+  const startsAt = parseDate(booking?.startsAt ?? booking?.requestedStartsAt ?? booking?.time);
+  const endsAt = parseDate(booking?.endsAt ?? booking?.requestedEndsAt ?? null);
+  if (!startsAt) return null;
+
+  const effectiveEndsAt = endsAt ?? new Date(startsAt.getTime() + 30 * 60 * 1000);
+
+  const [slot] = await db
+    .select()
+    .from(slots)
+    .where(and(
+      eq(slots.clientId, clientId),
+      gte(slots.startsAt, startsAt),
+      lte(slots.endsAt, effectiveEndsAt)
+    ));
+
+  return slot ?? null;
+}
+
 async function findOrCreateInboundCustomer(clientId, payload) {
   const phone = getRequestedPhone(payload);
   const incomingCustomer = getCustomerPayload(payload);
@@ -218,6 +311,7 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
   const callerPhone = getRequestedPhone(payload);
   const calledNumber = getCalledNumber(payload);
   const search = payload?.search ?? {};
+  const attemptCount = getSearchAttemptCount(payload);
 
   if (!clientId) {
     return {
@@ -229,8 +323,14 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
     };
   }
 
-  const from = parseDate(search?.from) ?? now;
-  const to = parseDate(search?.to) ?? new Date(from.getTime() + defaultWindowDays * 24 * 60 * 60 * 1000);
+  const customer = callerPhone
+    ? await findCustomerByPhone(clientId, callerPhone)
+    : null;
+  const waitlistEntry = customer
+    ? await findWaitlistEntryByCustomer(clientId, customer.id)
+    : null;
+
+  const { from, to } = getSearchWindow(search, { now, defaultWindowDays });
   const timeOfDay = typeof search?.timeOfDay === "string" ? search.timeOfDay : null;
 
   if (to <= from) {
@@ -266,10 +366,18 @@ export async function searchFonioAvailableSlots(payload, { now = new Date(), def
       to,
       timeOfDay
     },
+    waitlist: {
+      offerSpontaneousAppointments: true,
+      alreadyJoined: Boolean(waitlistEntry),
+      position: waitlistEntry?.position ?? null,
+      askAfterOfferCount: 3
+    },
     matches,
     promptHints: {
       bookingAvailable: matches.length > 0,
-      reason: matches.length > 0 ? null : "no_matching_slots"
+      reason: matches.length > 0 ? null : "no_matching_slots",
+      offerCountTried: attemptCount,
+      shouldOfferWaitlist: !waitlistEntry && (matches.length === 0 || attemptCount >= 3)
     }
   };
 }
@@ -288,9 +396,15 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
       calledNumber,
       customer: null,
       availableSlots: [],
+      waitlist: {
+        offerEarlierAppointments: true,
+        alreadyJoined: false,
+        position: null
+      },
       bookingRules: {
         timezone: "Europe/Vienna",
-        maxSlotsToOffer: maxSlots
+        maxSlotsToOffer: maxSlots,
+        askWaitlistAfterBooking: true
       },
       promptHints: {
         bookingAvailable: false,
@@ -302,6 +416,12 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
   const customer = callerPhone
     ? await findCustomerByPhone(clientId, callerPhone)
     : null;
+  const waitlistEntry = customer
+    ? await findWaitlistEntryByCustomer(clientId, customer.id)
+    : null;
+  const upcomingAppointments = customer
+    ? await listUpcomingAppointmentsForCustomer(clientId, customer.id, { now })
+    : [];
 
   const availableSlots = await listFonioAvailableSlots(clientId, {
     from: now,
@@ -330,14 +450,91 @@ export async function buildInboundContext(payload, { now = new Date(), maxSlots 
           isExistingCustomer: false,
           notes: null
         },
+    upcomingAppointments: upcomingAppointments.map((appointment) => ({
+      id: appointment.id,
+      title: appointment.title,
+      startsAt: appointment.startsAt,
+      endsAt: appointment.endsAt,
+      status: appointment.status
+    })),
+    waitlist: {
+      offerEarlierAppointments: true,
+      alreadyJoined: Boolean(waitlistEntry),
+      position: waitlistEntry?.position ?? null
+    },
     availableSlots,
     bookingRules: {
       timezone: "Europe/Vienna",
-      maxSlotsToOffer: maxSlots
+      maxSlotsToOffer: maxSlots,
+      askWaitlistAfterBooking: true
     },
     promptHints: {
       bookingAvailable: availableSlots.length > 0,
       reason: availableSlots.length > 0 ? null : "no_available_slots"
+    }
+  };
+}
+
+export async function listFonioUpcomingAppointments(payload, { now = new Date(), limit = 5 } = {}) {
+  const client = await resolveClient(payload);
+  const clientId = client?.id ?? null;
+  const callerPhone = getRequestedPhone(payload);
+  const calledNumber = getCalledNumber(payload);
+
+  if (!clientId) {
+    return {
+      handled: false,
+      reason: "unresolved_client",
+      callerPhone,
+      calledNumber,
+      appointments: []
+    };
+  }
+
+  const customer = callerPhone
+    ? await findCustomerByPhone(clientId, callerPhone)
+    : null;
+
+  if (!customer) {
+    return {
+      handled: true,
+      clientId,
+      practiceName: client.name,
+      callerPhone,
+      calledNumber,
+      customer: null,
+      appointments: [],
+      promptHints: {
+        hasUpcomingAppointments: false,
+        reason: "customer_not_found"
+      }
+    };
+  }
+
+  const appointments = await listUpcomingAppointmentsForCustomer(clientId, customer.id, { now });
+
+  return {
+    handled: true,
+    clientId,
+    practiceName: client.name,
+    callerPhone,
+    calledNumber,
+    customer: {
+      id: customer.id,
+      name: `${customer.firstName} ${customer.lastName}`.trim(),
+      firstName: customer.firstName,
+      lastName: customer.lastName
+    },
+    appointments: appointments.slice(0, limit).map((appointment) => ({
+      id: appointment.id,
+      title: appointment.title,
+      startsAt: appointment.startsAt,
+      endsAt: appointment.endsAt,
+      status: appointment.status
+    })),
+    promptHints: {
+      hasUpcomingAppointments: appointments.length > 0,
+      reason: appointments.length > 0 ? null : "no_upcoming_appointments"
     }
   };
 }
@@ -356,6 +553,47 @@ export async function handleInboundAppointmentWebhook(payload) {
 
   const slot = await findAvailableSlot(clientId, booking);
   if (!slot) {
+    if (wantsWaitlist(payload, booking)) {
+      const customer = await findOrCreateInboundCustomer(clientId, payload);
+      const requestedSlot = await findRequestedSlot(clientId, booking);
+      const waitlistResult = await createWaitlistEntryForCustomer(clientId, customer.id, {
+        notes: requestedSlot
+          ? `Requested earlier appointment options during Fonio booking for slot ${requestedSlot.id}.`
+          : "Requested earlier appointment options during Fonio booking."
+      });
+
+      await db.insert(communicationLogs).values({
+        id: randomUUID(),
+        clientId,
+        appointmentId: requestedSlot?.appointmentId ?? null,
+        customerId: customer.id,
+        channel: "call",
+        direction: "inbound",
+        eventType: "waitlist_joined_from_inbound_booking_call",
+        status: payload?.status ?? "processed",
+        externalCallId: payload?.callId ?? payload?.id ?? null,
+        payloadJson: JSON.stringify(payload)
+      });
+
+      return {
+        handled: true,
+        mode: "inbound_waitlist_after_booking",
+        clientId,
+        appointmentId: requestedSlot?.appointmentId ?? null,
+        customerId: customer.id,
+        slotId: requestedSlot?.id ?? booking?.slotId ?? booking?.slot?.id ?? null,
+        waitlist: {
+          entryId: waitlistResult.entry.id,
+          created: waitlistResult.created,
+          position: waitlistResult.entry.position
+        },
+        promptHints: {
+          bookingCreated: false,
+          reason: requestedSlot ? "requested_slot_unavailable" : "no_matching_available_slot"
+        }
+      };
+    }
+
     return { handled: false, reason: "no_matching_available_slot" };
   }
 
@@ -369,6 +607,18 @@ export async function handleInboundAppointmentWebhook(payload) {
     endsAt: slot.endsAt,
     notes: booking?.notes ?? payload?.summary ?? "Booked by Fonio inbound call"
   });
+
+  let waitlist = null;
+  if (wantsWaitlist(payload, booking)) {
+    const waitlistResult = await createWaitlistEntryForCustomer(clientId, customer.id, {
+      notes: `Requested earlier appointment options during Fonio booking for slot ${slot.id}.`
+    });
+    waitlist = {
+      entryId: waitlistResult.entry.id,
+      created: waitlistResult.created,
+      position: waitlistResult.entry.position
+    };
+  }
 
   await db.insert(communicationLogs).values({
     id: randomUUID(),
@@ -389,6 +639,89 @@ export async function handleInboundAppointmentWebhook(payload) {
     clientId,
     appointmentId: appointment.id,
     customerId: customer.id,
-    slotId: slot.id
+    slotId: slot.id,
+    waitlist
+  };
+}
+
+export async function handleInboundCancellation(payload) {
+  const client = await resolveClient(payload);
+  const clientId = client?.id ?? null;
+  if (!clientId) {
+    return { handled: false, reason: "unresolved_client" };
+  }
+
+  const cancellation = getCancellationPayload(payload);
+  const appointmentId = cancellation?.appointmentId ?? cancellation?.id ?? null;
+  if (!appointmentId) {
+    return { handled: false, reason: "missing_appointment_id" };
+  }
+
+  const customer = getRequestedPhone(payload)
+    ? await findCustomerByPhone(clientId, getRequestedPhone(payload))
+    : null;
+  const upcomingAppointments = customer
+    ? await listUpcomingAppointmentsForCustomer(clientId, customer.id)
+    : [];
+
+  const matchedAppointment = upcomingAppointments.find((appointment) => appointment.id === appointmentId);
+  if (!matchedAppointment) {
+    return { handled: false, reason: "appointment_not_found_for_caller" };
+  }
+
+  const cancelled = await transitionStatus(clientId, appointmentId, "cancelled", {
+    reason: cancellation?.reason ?? payload?.reason ?? "Cancelled by caller via Fonio inbound call"
+  });
+
+  await db.insert(communicationLogs).values({
+    id: randomUUID(),
+    clientId,
+    appointmentId: cancelled.id,
+    customerId: customer?.id ?? null,
+    channel: "call",
+    direction: "inbound",
+    eventType: "appointment_cancelled_from_inbound_call",
+    status: payload?.status ?? "processed",
+    externalCallId: payload?.callId ?? payload?.id ?? null,
+    payloadJson: JSON.stringify(payload)
+  });
+
+  return {
+    handled: true,
+    mode: "inbound_cancellation",
+    clientId,
+    appointmentId: cancelled.id,
+    status: cancelled.status,
+    releasedSlotId: matchedAppointment.slotId ?? null
+  };
+}
+
+export async function handleInboundWaitlist(payload) {
+  const client = await resolveClient(payload);
+  const clientId = client?.id ?? null;
+  const callerPhone = getRequestedPhone(payload);
+  const calledNumber = getCalledNumber(payload);
+
+  if (!clientId) {
+    return { handled: false, reason: "unresolved_client", callerPhone, calledNumber };
+  }
+
+  const customer = await findOrCreateInboundCustomer(clientId, payload);
+  const waitlistResult = await createWaitlistEntryForCustomer(clientId, customer.id, {
+    notes: typeof payload?.waitlist?.notes === "string" && payload.waitlist.notes.trim()
+      ? payload.waitlist.notes.trim()
+      : "Requested spontaneous earlier appointment dates during Fonio call."
+  });
+
+  return {
+    handled: true,
+    mode: "inbound_waitlist",
+    clientId,
+    customerId: customer.id,
+    waitlist: {
+      entryId: waitlistResult.entry.id,
+      created: waitlistResult.created,
+      position: waitlistResult.entry.position
+    }
   };
 }
