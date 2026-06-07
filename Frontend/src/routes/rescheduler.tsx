@@ -51,7 +51,7 @@ const stateLabels: Record<ReschedulerState, string> = {
   calling: "Calling",
   filled: "Filled",
   aborted: "Aborted",
-  failed: "Failed",
+  failed: "Not responded",
 };
 
 const candidateStateLabels: Record<ReschedulerCandidate["state"], string> = {
@@ -62,7 +62,7 @@ const candidateStateLabels: Record<ReschedulerCandidate["state"], string> = {
   skipped: "Skipped",
 };
 
-const activeStates = new Set<ReschedulerState>(["pending", "calling", "failed"]);
+const activeStates = new Set<ReschedulerState>(["pending", "calling"]);
 
 export function ReschedulerPage() {
   const { reschedulerFlows } = useLoaderData() as ReschedulerLoaderData;

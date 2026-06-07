@@ -18,7 +18,7 @@ import { getReschedulerCandidateWindow } from "../settings/settings.service.js";
 import { autoStartOfferCycle } from "../waitlist/offers.service.js";
 import { deleteWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
-const ACTIVE_FLOW_STATES = ["pending", "calling", "failed"];
+const ACTIVE_FLOW_STATES = ["pending", "calling"];
 const replacementCustomers = alias(customers, "replacement_customers");
 
 function mapOfferStatusToCandidateState(status) {
@@ -259,6 +259,60 @@ export async function syncReschedulerOfferOutcome(clientId, offerId) {
   }
 
   return { candidateId: candidate.id, state };
+}
+
+export async function markReschedulerFlowExhausted(clientId, offerId, { userId = null } = {}) {
+  const [offer] = await db
+    .select({ id: waitlistOffers.id, slotId: waitlistOffers.slotId, status: waitlistOffers.status })
+    .from(waitlistOffers)
+    .where(and(eq(waitlistOffers.clientId, clientId), eq(waitlistOffers.id, offerId)))
+    .limit(1);
+
+  if (!offer) return null;
+
+  const [flow] = await db
+    .select()
+    .from(reschedulerFlows)
+    .where(and(
+      eq(reschedulerFlows.clientId, clientId),
+      eq(reschedulerFlows.originalSlotId, offer.slotId),
+      inArray(reschedulerFlows.state, ACTIVE_FLOW_STATES)
+    ))
+    .orderBy(desc(reschedulerFlows.createdAt))
+    .limit(1);
+
+  if (!flow) return null;
+
+  const now = new Date();
+  const [updated] = await db
+    .update(reschedulerFlows)
+    .set({
+      state: "failed",
+      completedAt: now,
+      updatedAt: now
+    })
+    .where(and(eq(reschedulerFlows.clientId, clientId), eq(reschedulerFlows.id, flow.id)))
+    .returning();
+
+  if (updated) {
+    await writeAuditLog({
+      clientId,
+      userId,
+      appointmentId: flow.cancelledAppointmentId,
+      entityType: "rescheduler_flow",
+      entityId: flow.id,
+      action: "rescheduler_not_responded",
+      fromState: flow.state,
+      toState: "failed",
+      metadataJson: JSON.stringify({
+        finalOfferId: offer.id,
+        finalOfferStatus: offer.status,
+        outcome: "No rescheduler candidate accepted before the waitlist was exhausted."
+      })
+    });
+  }
+
+  return updated;
 }
 
 function extractSelectedAppointmentId(payload) {

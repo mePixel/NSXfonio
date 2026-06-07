@@ -4,6 +4,7 @@ import { db } from "../../db/index.js";
 import { webhookEvents, waitlistOffers, customers, waitingListEntries, communicationLogs } from "../../db/schema.js";
 import {
   completeAcceptedReschedulerOffer,
+  markReschedulerFlowExhausted,
   recordCandidateForOffer,
   syncReschedulerOfferOutcome
 } from "../rescheduler/rescheduler.service.js";
@@ -173,6 +174,8 @@ async function handleOutboundWebhook(payload) {
       advanced = await advanceOfferCycle(offer.clientId, offerId);
       if (advanced.nextOffer?.id) {
         await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+      } else {
+        await markReschedulerFlowExhausted(offer.clientId, offerId);
       }
     } catch (error) {
       console.error("[fonio webhook] failed to advance waitlist offer after no answer", {
@@ -201,6 +204,8 @@ async function handleOutboundWebhook(payload) {
       const advanced = await advanceOfferCycle(offer.clientId, offerId);
       if (advanced.nextOffer?.id) {
         await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+      } else {
+        await markReschedulerFlowExhausted(offer.clientId, offerId);
       }
       return { handled: true, mode: "outbound", outcome: "declined", offerId };
     }
