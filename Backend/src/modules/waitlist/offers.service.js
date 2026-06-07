@@ -172,6 +172,33 @@ function buildCancelledSlotCallContext(slot, customer, offer) {
   return {
     name,
     patientName: name,
+    patient: {
+      id: customer.id,
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      fullName: name,
+      phone: customer.phone,
+      whatsappPhone: customer.whatsappPhone,
+      email: customer.email,
+      notes: customer.notes
+    },
+    customer: {
+      id: customer.id,
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      fullName: name,
+      phone: customer.phone,
+      whatsappPhone: customer.whatsappPhone,
+      email: customer.email,
+      notes: customer.notes
+    },
+    patientId: customer.id,
+    patientFirstName: customer.firstName,
+    patientLastName: customer.lastName,
+    patientPhone: customer.phone,
+    patientWhatsappPhone: customer.whatsappPhone,
+    patientEmail: customer.email,
+    patientNotes: customer.notes,
     slotId: slot.id,
     slotStartsAt: slot.startsAt?.toISOString?.() ?? slot.startsAt,
     slotEndsAt: slot.endsAt?.toISOString?.() ?? slot.endsAt,

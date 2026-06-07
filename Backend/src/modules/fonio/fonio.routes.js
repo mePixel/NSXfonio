@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireFonioApiKey } from "../../lib/middleware.js";
 import { isoDate, str } from "../../lib/sanitize.js";
+import { acceptReschedulerOffer } from "../rescheduler/rescheduler.service.js";
 import {
   buildInboundContext,
   handleInboundAppointmentWebhook,
@@ -147,6 +148,29 @@ fonioRouter.post("/inbound-waitlist", async (req, res, next) => {
     };
 
     res.status(statusByReason[result.reason] ?? 422).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+fonioRouter.post("/rescheduler/accept", async (req, res, next) => {
+  try {
+    const offerId = req.body?.offerId ?? req.body?.context?.offerId ?? null;
+
+    if (!offerId || typeof offerId !== "string") {
+      res.status(400).json({
+        handled: false,
+        reason: "missing_offer_id",
+        error: "offerId is required"
+      });
+      return;
+    }
+
+    const result = await acceptReschedulerOffer(req.fonioAuth.clientId, offerId, {
+      payload: req.body ?? {}
+    });
+
+    res.status(result.alreadyFilled ? 200 : 201).json(result);
   } catch (error) {
     next(error);
   }

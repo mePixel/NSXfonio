@@ -100,11 +100,13 @@ async function handleOutboundWebhook(payload) {
   }
 
   if (answered) {
-    await db.update(waitlistOffers)
-      .set({ status: "accepted", updatedAt: new Date() })
-      .where(eq(waitlistOffers.id, offerId));
-    await syncReschedulerOfferOutcome(offer.clientId, offerId);
-    return { handled: true, mode: "outbound", outcome: "accepted", offerId };
+    return {
+      handled: true,
+      mode: "outbound",
+      outcome: "call_completed",
+      offerId,
+      nextAction: "Call /api/fonio/rescheduler/accept only if the patient clearly accepted the offered appointment."
+    };
   }
 
   return { handled: false, mode: "outbound", reason: "status_not_mapped", offerId };
