@@ -12,6 +12,36 @@ const DEFAULT_DEADLINE_MINUTES = 60;
 const CANCELLED_SLOT_OPENING_PROMPT =
   "A booked appointment was just cancelled, so this earlier slot is now available. Call the waitlist patient, explain that an earlier appointment opened up, offer this exact slot, and only book it if they clearly accept.";
 
+function formatCallDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("de-AT", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Vienna"
+  }).format(date);
+}
+
+function formatCallTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("de-AT", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Vienna"
+  }).format(date);
+}
+
 // Finds the next waitlist entry that has not yet been offered (or all previous offers are terminal).
 async function getNextEntry(clientId, slotId) {
   const entries = await db
@@ -133,14 +163,28 @@ async function expireStaleActiveOffers(clientId, slotId) {
 }
 
 function buildCancelledSlotCallContext(slot, customer, offer) {
+  const name = `${customer.firstName} ${customer.lastName}`.trim();
+  const slotStartLabel = formatCallDateTime(slot.startsAt);
+  const slotEndLabel = formatCallTime(slot.endsAt);
+  const appointmentLabel = slotStartLabel && slotEndLabel
+    ? `${slotStartLabel} bis ${slotEndLabel}`
+    : "";
+
   return {
-    name: `${customer.firstName} ${customer.lastName}`,
+    name,
+    patientName: name,
     slotId: slot.id,
     slotStartsAt: slot.startsAt?.toISOString?.() ?? slot.startsAt,
     slotEndsAt: slot.endsAt?.toISOString?.() ?? slot.endsAt,
+    slotStartLabel,
+    slotEndLabel,
+    appointmentLabel,
     offerId: offer.id,
     scenario: "cancelled_slot_waitlist_offer",
-    openingPrompt: CANCELLED_SLOT_OPENING_PROMPT
+    openingPrompt: CANCELLED_SLOT_OPENING_PROMPT,
+    firstMessage: appointmentLabel
+      ? `Guten Tag ${name}, hier ist Smiledent. Es ist kurzfristig ein früherer Termin frei geworden: ${appointmentLabel}. Passt dieser Termin für Sie?`
+      : `Guten Tag ${name}, hier ist Smiledent. Es ist kurzfristig ein früherer Termin frei geworden. Passt dieser Termin für Sie?`
   };
 }
 

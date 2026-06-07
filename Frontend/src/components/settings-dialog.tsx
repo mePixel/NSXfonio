@@ -257,7 +257,7 @@ function AppearanceSettingsSection() {
       <div className="flex flex-col gap-1">
         <h3 className="text-sm font-semibold">Appearance</h3>
         <p className="text-xs text-muted-foreground">
-          Choose the color mode used across the dashboard.
+          Choose the color mode used across the app.
         </p>
       </div>
       <ButtonGroup className="w-fit">
