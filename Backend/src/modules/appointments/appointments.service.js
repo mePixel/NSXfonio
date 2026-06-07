@@ -3,6 +3,7 @@ import { and, eq, gte, inArray, asc } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { appointments, customers, slots } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/audit.service.js";
+import { deleteWaitlistEntryByCustomer } from "../waitlist/waitlist.service.js";
 
 export function listAppointments(clientId) {
   return db
@@ -105,6 +106,8 @@ export async function createAppointment(clientId, data, { userId = null } = {}) 
       },
       tx
     );
+
+    await deleteWaitlistEntryByCustomer(clientId, appointment.customerId, tx);
 
     return appointment;
   });

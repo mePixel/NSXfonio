@@ -43,8 +43,8 @@ export async function createWaitlistEntry(clientId, data) {
   return row;
 }
 
-export async function findWaitlistEntryByCustomer(clientId, customerId) {
-  const [row] = await db
+export async function findWaitlistEntryByCustomer(clientId, customerId, database = db) {
+  const [row] = await database
     .select()
     .from(waitingListEntries)
     .where(and(
@@ -95,19 +95,19 @@ export async function updateWaitlistEntry(clientId, id, data) {
   return row ?? null;
 }
 
-export async function deleteWaitlistEntry(clientId, id) {
-  const [row] = await db
+export async function deleteWaitlistEntry(clientId, id, database = db) {
+  const [row] = await database
     .delete(waitingListEntries)
     .where(and(eq(waitingListEntries.clientId, clientId), eq(waitingListEntries.id, id)))
     .returning();
   return row ?? null;
 }
 
-export async function deleteWaitlistEntryByCustomer(clientId, customerId) {
-  const existingEntry = await findWaitlistEntryByCustomer(clientId, customerId);
+export async function deleteWaitlistEntryByCustomer(clientId, customerId, database = db) {
+  const existingEntry = await findWaitlistEntryByCustomer(clientId, customerId, database);
   if (!existingEntry) {
     return null;
   }
 
-  return deleteWaitlistEntry(clientId, existingEntry.id);
+  return deleteWaitlistEntry(clientId, existingEntry.id, database);
 }

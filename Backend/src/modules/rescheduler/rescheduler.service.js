@@ -635,10 +635,10 @@ export async function completeReschedulerSlotBooking(
       payloadJson: payload ? JSON.stringify(payload) : null
     });
 
+    await deleteWaitlistEntryByCustomer(clientId, resolvedCustomerId, tx);
+
     return { replacementAppointment: createdAppointment };
   });
-
-  await deleteWaitlistEntryByCustomer(clientId, resolvedCustomerId);
 
   if (releasedAppointment?.slotId) {
     nextOfferResult = await autoStartOfferCycle(clientId, releasedAppointment.slotId, { userId });
@@ -881,10 +881,10 @@ export async function completeAcceptedReschedulerOffer(
       payloadJson: payload ? JSON.stringify(payload) : null
     });
 
+    await deleteWaitlistEntryByCustomer(clientId, offer.customerId, tx);
+
     return { replacementAppointment: createdAppointment };
   });
-
-  await deleteWaitlistEntryByCustomer(clientId, offer.customerId);
 
   if (releasedAppointment?.slotId) {
     nextOfferResult = await autoStartOfferCycle(clientId, releasedAppointment.slotId, { userId });
