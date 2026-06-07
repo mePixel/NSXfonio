@@ -18,14 +18,15 @@ function formatCallDateTime(value) {
     return "";
   }
 
-  return new Intl.DateTimeFormat("de-AT", {
+  return new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "Europe/Vienna"
+    timeZone: "Europe/Vienna",
+    timeZoneName: "short"
   }).format(date);
 }
 
@@ -35,7 +36,7 @@ function formatCallTime(value) {
     return "";
   }
 
-  return new Intl.DateTimeFormat("de-AT", {
+  return new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     timeZone: "Europe/Vienna"
@@ -167,7 +168,7 @@ function buildCancelledSlotCallContext(slot, customer, offer) {
   const slotStartLabel = formatCallDateTime(slot.startsAt);
   const slotEndLabel = formatCallTime(slot.endsAt);
   const appointmentLabel = slotStartLabel && slotEndLabel
-    ? `${slotStartLabel} bis ${slotEndLabel}`
+    ? `${slotStartLabel} to ${slotEndLabel}`
     : "";
 
   return {
@@ -183,8 +184,8 @@ function buildCancelledSlotCallContext(slot, customer, offer) {
     scenario: "cancelled_slot_waitlist_offer",
     openingPrompt: CANCELLED_SLOT_OPENING_PROMPT,
     firstMessage: appointmentLabel
-      ? `Guten Tag ${name}, hier ist Smiledent. Es ist kurzfristig ein früherer Termin frei geworden: ${appointmentLabel}. Passt dieser Termin für Sie?`
-      : `Guten Tag ${name}, hier ist Smiledent. Es ist kurzfristig ein früherer Termin frei geworden. Passt dieser Termin für Sie?`
+      ? `Hello ${name}, this is Smiledent Dental Office. An earlier appointment just became available: ${appointmentLabel}. Would this appointment work for you?`
+      : `Hello ${name}, this is Smiledent Dental Office. An earlier appointment just became available. Would this appointment work for you?`
   };
 }
 
