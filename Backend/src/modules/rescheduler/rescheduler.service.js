@@ -909,6 +909,43 @@ export async function acceptReschedulerOffer(clientId, offerId, { payload = {}, 
   return serializeAcceptResult(result);
 }
 
+export async function acceptCurrentReschedulerOffer(clientId, { payload = {}, userId = null } = {}) {
+  const activeOffers = await db
+    .select({
+      id: waitlistOffers.id
+    })
+    .from(waitlistOffers)
+    .innerJoin(reschedulerFlows, and(
+      eq(reschedulerFlows.clientId, waitlistOffers.clientId),
+      eq(reschedulerFlows.originalSlotId, waitlistOffers.slotId)
+    ))
+    .where(and(
+      eq(waitlistOffers.clientId, clientId),
+      inArray(waitlistOffers.status, ACTIVE_OFFER_STATUSES),
+      inArray(reschedulerFlows.state, ACTIVE_FLOW_STATES)
+    ))
+    .orderBy(desc(waitlistOffers.createdAt))
+    .limit(2);
+
+  if (activeOffers.length === 0) {
+    throw Object.assign(new Error("Offer not found"), { status: 404 });
+  }
+
+  if (activeOffers.length > 1) {
+    throw Object.assign(
+      new Error("Multiple active rescheduler offers exist; offerId or slotId is required."),
+      { status: 409 }
+    );
+  }
+
+  console.warn("[rescheduler accept] accepting only active offer because supplied offerId was not found", {
+    activeOfferId: activeOffers[0].id,
+    requestedOfferId: payload?.offerId ?? null
+  });
+
+  return acceptReschedulerOffer(clientId, activeOffers[0].id, { payload, userId });
+}
+
 export async function acceptReschedulerSlotBooking(
   clientId,
   { slotId, customerId, payload = {}, userId = null } = {}

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireFonioApiKey } from "../../lib/middleware.js";
 import { isoDate, str } from "../../lib/sanitize.js";
 import {
+  acceptCurrentReschedulerOffer,
   acceptReschedulerOffer,
   acceptReschedulerSlotBooking
 } from "../rescheduler/rescheduler.service.js";
@@ -21,6 +22,7 @@ fonioRouter.use(requireFonioApiKey);
 
 function getReschedulerAcceptOfferId(payload) {
   const contextOfferId = payload?.context?.offerId;
+  const nestedOfferId = payload?.reschedulerAccept?.offerId;
   const topLevelOfferId = payload?.offerId;
 
   if (typeof contextOfferId === "string" && contextOfferId.trim()) {
@@ -36,6 +38,21 @@ function getReschedulerAcceptOfferId(payload) {
     }
 
     return contextOfferId;
+  }
+
+  if (typeof nestedOfferId === "string" && nestedOfferId.trim()) {
+    if (
+      typeof topLevelOfferId === "string"
+      && topLevelOfferId.trim()
+      && topLevelOfferId !== nestedOfferId
+    ) {
+      console.warn("[fonio rescheduler accept] offerId mismatch; using nested reschedulerAccept offerId", {
+        nestedOfferId,
+        topLevelOfferId
+      });
+    }
+
+    return nestedOfferId;
   }
 
   return typeof topLevelOfferId === "string" && topLevelOfferId.trim()
@@ -222,9 +239,21 @@ fonioRouter.post("/rescheduler/accept", async (req, res, next) => {
     const offerId = getReschedulerAcceptOfferId(req.body);
 
     if (offerId) {
-      const result = await acceptReschedulerOffer(req.fonioAuth.clientId, offerId, {
-        payload: req.body ?? {}
-      });
+      let result;
+
+      try {
+        result = await acceptReschedulerOffer(req.fonioAuth.clientId, offerId, {
+          payload: req.body ?? {}
+        });
+      } catch (error) {
+        if (error?.status !== 404) {
+          throw error;
+        }
+
+        result = await acceptCurrentReschedulerOffer(req.fonioAuth.clientId, {
+          payload: req.body ?? {}
+        });
+      }
 
       res.status(result.alreadyFilled ? 200 : 201).json(result);
       return;
