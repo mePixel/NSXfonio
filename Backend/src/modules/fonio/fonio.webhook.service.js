@@ -2,11 +2,56 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { webhookEvents, waitlistOffers, customers, waitingListEntries, communicationLogs } from "../../db/schema.js";
-import { recordCandidateForOffer, syncReschedulerOfferOutcome } from "../rescheduler/rescheduler.service.js";
+import {
+  completeAcceptedReschedulerOffer,
+  recordCandidateForOffer,
+  syncReschedulerOfferOutcome
+} from "../rescheduler/rescheduler.service.js";
 import { advanceOfferCycle, moveWaitlistEntryToEnd } from "../waitlist/offers.service.js";
 import { handleInboundAppointmentWebhook, isInboundAppointmentWebhook } from "./fonio.inbound.service.js";
 import { sendNoAnswerFollowupEmail } from "../email/email.service.js";
 import { getSlot } from "../slots/slots.service.js";
+
+function extractWaitlistDecision(payload) {
+  const rawValues = [
+    payload?.waitlist?.decision,
+    payload?.offerDecision,
+    payload?.decision,
+    payload?.intent?.name,
+    payload?.intent?.status,
+    payload?.outcome,
+    payload?.result?.decision
+  ].filter(Boolean);
+
+  if (payload?.waitlist?.accepted === true || payload?.accepted === true) {
+    return "accepted";
+  }
+  if (payload?.waitlist?.accepted === false || payload?.accepted === false) {
+    return "declined";
+  }
+
+  for (const value of rawValues) {
+    const normalized = String(value).toLowerCase();
+    if (["accept", "accepted", "confirm", "confirmed", "yes", "booked"].includes(normalized)) {
+      return "accepted";
+    }
+    if (["decline", "declined", "reject", "rejected", "no"].includes(normalized)) {
+      return "declined";
+    }
+  }
+
+  return null;
+}
+
+function extractSelectedAppointmentId(payload) {
+  return payload?.cancellation?.appointmentId
+    ?? payload?.selectedAppointmentId
+    ?? payload?.appointmentId
+    ?? payload?.appointment?.id
+    ?? payload?.selectedAppointment?.id
+    ?? payload?.reschedule?.appointmentToCancelId
+    ?? null;
+}
 
 async function storeWebhookEvent(payload) {
   const externalEventId = payload?.eventId ?? payload?.webhookEventId ?? payload?.callId ?? payload?.id ?? null;
@@ -146,11 +191,43 @@ async function handleOutboundWebhook(payload) {
   }
 
   if (answered) {
-    await db.update(waitlistOffers)
-      .set({ status: "accepted", updatedAt: new Date() })
-      .where(eq(waitlistOffers.id, offerId));
-    await syncReschedulerOfferOutcome(offer.clientId, offerId);
-    return { handled: true, mode: "outbound", outcome: "accepted", offerId };
+    const decision = extractWaitlistDecision(payload);
+
+    if (decision === "declined") {
+      await db.update(waitlistOffers)
+        .set({ status: "declined", updatedAt: new Date() })
+        .where(eq(waitlistOffers.id, offerId));
+      await syncReschedulerOfferOutcome(offer.clientId, offerId);
+      const advanced = await advanceOfferCycle(offer.clientId, offerId);
+      if (advanced.nextOffer?.id) {
+        await recordCandidateForOffer(offer.clientId, advanced.nextOffer.id);
+      }
+      return { handled: true, mode: "outbound", outcome: "declined", offerId };
+    }
+
+    if (decision === "accepted") {
+      const selectedAppointmentId = extractSelectedAppointmentId(payload);
+      const result = await completeAcceptedReschedulerOffer(offer.clientId, offerId, {
+        selectedAppointmentId,
+        payload
+      });
+      return {
+        handled: true,
+        mode: "outbound",
+        outcome: "accepted",
+        offerId,
+        replacementAppointmentId: result.replacementAppointment.id,
+        cancelledAppointmentId: result.cancelledAppointmentId
+      };
+    }
+
+    return {
+      handled: true,
+      mode: "outbound",
+      outcome: "call_completed",
+      offerId,
+      nextAction: "Call /api/fonio/rescheduler/accept only if the patient clearly accepted the offered appointment."
+    };
   }
 
   return { handled: false, mode: "outbound", reason: "status_not_mapped", offerId };

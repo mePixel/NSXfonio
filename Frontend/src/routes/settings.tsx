@@ -1,10 +1,11 @@
 import * as React from "react";
-import { KeyRound, Moon, RefreshCw, ShieldCheck, Sun, Trash2 } from "lucide-react";
+import { CalendarClock, KeyRound, Moon, RefreshCw, ShieldCheck, Sun, Trash2 } from "lucide-react";
 import { useFetcher, useLoaderData } from "react-router";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { loadAppointmentSettings, updateAppointmentSettings } from "@/lib/appointments";
 import { type FonioApiKeySummary, loadFonioApiKey, rotateFonioApiKey, revokeFonioApiKey } from "@/lib/fonio-settings";
 
 type SettingsLoaderData = Awaited<ReturnType<typeof loadFonioApiKey>>;
@@ -16,6 +17,10 @@ type SettingsActionData =
 export function SettingsPage() {
   const { apiKey } = useLoaderData() as SettingsLoaderData;
   const fetcher = useFetcher<SettingsActionData>();
+  const appointmentSettingsFetcher = useFetcher<
+    Awaited<ReturnType<typeof loadAppointmentSettings>>
+    | Awaited<ReturnType<typeof updateAppointmentSettings>>
+  >();
   const { resolvedTheme, setTheme } = useTheme();
   const [name, setName] = React.useState(apiKey?.name ?? "Fonio");
   const latestCreatedKey = fetcher.data && fetcher.data.ok && "apiKey" in fetcher.data
@@ -24,6 +29,22 @@ export function SettingsPage() {
 
   const isBusy = fetcher.state !== "idle";
   const activeKey = apiKey && !apiKey.revokedAt ? apiKey : null;
+  const appointmentSettingsData = appointmentSettingsFetcher.data;
+  const appointmentSettings =
+    appointmentSettingsData && "settings" in appointmentSettingsData
+      ? appointmentSettingsData.settings
+      : null;
+  const appointmentSettingsError =
+    appointmentSettingsData && "ok" in appointmentSettingsData && appointmentSettingsData.ok === false
+      ? appointmentSettingsData
+      : null;
+  const isAppointmentSettingsBusy = appointmentSettingsFetcher.state !== "idle";
+
+  React.useEffect(() => {
+    if (!appointmentSettings && appointmentSettingsFetcher.state === "idle") {
+      void appointmentSettingsFetcher.load("/appointment-settings");
+    }
+  }, [appointmentSettings, appointmentSettingsFetcher]);
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
@@ -41,7 +62,7 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle>Appearance</CardTitle>
           <CardDescription>
-            Choose the color mode used across the dashboard.
+            Choose the color mode used across the app.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -136,6 +157,63 @@ export function SettingsPage() {
               </Button>
             ) : null}
           </fetcher.Form>
+        </CardContent>
+      </Card>
+
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarClock className="size-4 text-muted-foreground" />
+            Rescheduler
+          </CardTitle>
+          <CardDescription>
+            Control how many upcoming appointments Fonio considers when it has to ask which booking should be replaced.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {appointmentSettings ? (
+            <appointmentSettingsFetcher.Form method="post" action="/appointment-settings" className="grid gap-4">
+              <label className="grid gap-1 text-xs font-medium">
+                Appointments to consider
+                <Input
+                  name="reschedulerCandidateWindow"
+                  type="number"
+                  min={1}
+                  max={10}
+                  step={1}
+                  defaultValue={String(appointmentSettings.reschedulerCandidateWindow)}
+                  required
+                />
+              </label>
+
+              <input type="hidden" name="timeSlotSize" value={String(appointmentSettings.timeSlotSize)} />
+              <input type="hidden" name="officeHoursStart" value={appointmentSettings.officeHoursStart} />
+              <input type="hidden" name="officeHoursEnd" value={appointmentSettings.officeHoursEnd} />
+              {appointmentSettings.workingDays.map((day) => (
+                <input key={day} type="hidden" name="workingDays" value={String(day)} />
+              ))}
+
+              {appointmentSettingsError?.errors.reschedulerCandidateWindow ? (
+                <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {appointmentSettingsError.errors.reschedulerCandidateWindow}
+                </p>
+              ) : null}
+
+              <div className="flex items-center gap-2">
+                <Button type="submit" disabled={isAppointmentSettingsBusy}>
+                  {isAppointmentSettingsBusy ? <RefreshCw className="size-4 animate-spin" /> : null}
+                  Save
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Default is `3`.
+                </span>
+              </div>
+            </appointmentSettingsFetcher.Form>
+          ) : (
+            <div className="text-sm text-muted-foreground">
+              Loading appointment settings...
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

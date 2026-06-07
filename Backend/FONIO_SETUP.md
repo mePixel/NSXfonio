@@ -243,6 +243,89 @@ When a cancellation releases a slot, the backend triggers an outbound waitlist c
 
 The Fonio agent should branch on `scenario === "cancelled_slot_waitlist_offer"` and use `openingPrompt`, `name`, `slotStartsAt`, and `slotEndsAt` in the first turn.
 
+The outbound call context also includes a ready-to-say first message and the full waitlist patient profile:
+
+```json
+{
+  "scenario": "cancelled_slot_waitlist_offer",
+  "firstMessage": "Hello Anna Mueller, this is Smiledent Dental Office. An earlier appointment just became available: Tuesday, June 23 at 09:00 AM to 09:30 AM. Would this appointment work for you?",
+  "appointmentLabel": "Tuesday, June 23 at 09:00 AM to 09:30 AM",
+  "patientName": "Anna Mueller",
+  "patientEmail": "anna@example.com",
+  "patientPhone": "+436641234567",
+  "patientWhatsappPhone": "+436641234567",
+  "patientNotes": "Prefers mornings",
+  "patient": {
+    "id": "customer-id",
+    "firstName": "Anna",
+    "lastName": "Mueller",
+    "fullName": "Anna Mueller",
+    "phone": "+436641234567",
+    "whatsappPhone": "+436641234567",
+    "email": "anna@example.com",
+    "notes": "Prefers mornings"
+  },
+  "offerId": "waitlist-offer-id",
+  "slotId": "slot-1",
+  "slotStartLabel": "Tuesday, June 23 at 09:00 AM",
+  "slotEndLabel": "09:30 AM"
+}
+```
+
+In the Fonio outbound first-message field, use the context-scoped variable:
+
+```text
+{{firstMessage}}
+```
+
+If the patient wants the earlier slot, the agent must explicitly confirm the reschedule decision and identify which existing appointment should be cancelled:
+
+- if the patient has one upcoming appointment, the agent should confirm that this appointment will be replaced
+- if the patient has multiple upcoming appointments, the agent must ask which appointment should be cancelled before confirming acceptance
+- the outbound webhook payload should include an explicit accept/decline decision and, when needed, the selected appointment id to cancel
+
+When the patient clearly accepts the offered appointment, Fonio must call:
+
+`POST /api/fonio/rescheduler/accept`
+
+Headers:
+
+```http
+Authorization: Bearer <fonio-api-key>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "offerId": "{{offerId}}",
+  "selectedAppointmentId": "<required when the patient has multiple upcoming appointments>",
+  "callId": "{{callId}}",
+  "summary": "Patient accepted the earlier appointment.",
+  "formattedPlainTranscript": "<optional transcript>"
+}
+```
+
+Response:
+
+```json
+{
+  "handled": true,
+  "mode": "rescheduler_accept",
+  "alreadyFilled": false,
+  "appointmentId": "replacement-appointment-id",
+  "replacementAppointmentId": "replacement-appointment-id",
+  "cancelledAppointmentId": "cancelled-appointment-id",
+  "customerId": "customer-id",
+  "slotId": "slot-1",
+  "startsAt": "2026-06-23T09:00:00.000Z",
+  "endsAt": "2026-06-23T09:30:00.000Z"
+}
+```
+
+Only call this accept endpoint after the patient clearly agrees to take the offered slot. A completed or answered call is not enough by itself.
+
 For looking up the caller's cancellable appointments during the call, use:
 
 - `POST /api/fonio/inbound-upcoming-appointments`

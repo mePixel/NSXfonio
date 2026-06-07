@@ -257,7 +257,7 @@ function AppearanceSettingsSection() {
       <div className="flex flex-col gap-1">
         <h3 className="text-sm font-semibold">Appearance</h3>
         <p className="text-xs text-muted-foreground">
-          Choose the color mode used across the dashboard.
+          Choose the color mode used across the app.
         </p>
       </div>
       <ButtonGroup className="w-fit">
@@ -408,7 +408,7 @@ function AppointmentSettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="flex flex-col gap-1">
         <h3 className="text-sm font-semibold">Appointment Settings</h3>
         <p className="text-xs text-muted-foreground">
-          Configure slot length, office hours, and working days for scheduling.
+          Configure slot length, office hours, working days, and rescheduler behavior.
         </p>
       </div>
 
@@ -481,6 +481,28 @@ function AppointmentSettingsPanel({ onClose }: { onClose: () => void }) {
           </span>
         ) : null}
       </div>
+
+      <label className="grid gap-1 text-xs font-medium">
+        Appointments to consider for waitlist rescheduling
+        <Input
+          aria-invalid={Boolean(actionError?.errors.reschedulerCandidateWindow) || undefined}
+          name="reschedulerCandidateWindow"
+          type="number"
+          min={1}
+          max={10}
+          step={1}
+          defaultValue={String(settings.reschedulerCandidateWindow)}
+          required
+        />
+        <span className="text-xs font-normal text-muted-foreground">
+          Limits how many upcoming appointments Fonio can use when it needs to ask which booking should be replaced.
+        </span>
+        {actionError?.errors.reschedulerCandidateWindow ? (
+          <span className="text-xs font-normal text-destructive">
+            {actionError.errors.reschedulerCandidateWindow}
+          </span>
+        ) : null}
+      </label>
 
       <DialogFooter>
         <Button

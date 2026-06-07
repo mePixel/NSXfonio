@@ -39,6 +39,7 @@ export type AppointmentSettings = {
   workingDays: number[];
   officeHoursStart: string;
   officeHoursEnd: string;
+  reschedulerCandidateWindow: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -58,7 +59,7 @@ export type AppointmentField =
 
 export type AppointmentFieldErrors = Partial<Record<AppointmentField, string>>;
 export type AppointmentSettingsFieldErrors = Partial<
-  Record<"timeSlotSize" | "workingDays" | "officeHoursStart" | "officeHoursEnd", string>
+  Record<"timeSlotSize" | "workingDays" | "officeHoursStart" | "officeHoursEnd" | "reschedulerCandidateWindow", string>
 >;
 
 type ApiErrorBody = {
@@ -258,6 +259,7 @@ export async function updateAppointmentSettings(formData: FormData) {
   const workingDays = formData.getAll("workingDays").map((day) => Number(day));
   const officeHoursStart = String(formData.get("officeHoursStart") ?? "").trim();
   const officeHoursEnd = String(formData.get("officeHoursEnd") ?? "").trim();
+  const reschedulerCandidateWindow = Number(formData.get("reschedulerCandidateWindow"));
   const response = await fetch(`${apiURL}/api/appointment-settings`, {
     method: "PATCH",
     credentials: "include",
@@ -269,6 +271,7 @@ export async function updateAppointmentSettings(formData: FormData) {
       workingDays,
       officeHoursStart,
       officeHoursEnd,
+      reschedulerCandidateWindow,
     }),
   });
 
@@ -284,7 +287,7 @@ export async function updateAppointmentSettings(formData: FormData) {
       intent: "updateSettings" as const,
       message: error.message,
       errors: error.errors as AppointmentSettingsFieldErrors,
-      values: { timeSlotSize, workingDays, officeHoursStart, officeHoursEnd },
+      values: { timeSlotSize, workingDays, officeHoursStart, officeHoursEnd, reschedulerCandidateWindow },
     };
   }
 

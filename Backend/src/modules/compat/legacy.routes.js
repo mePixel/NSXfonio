@@ -4,6 +4,7 @@ import { and, asc, eq, gte, inArray, lt, ne } from "drizzle-orm";
 import { db, pool } from "../../db/index.js";
 import { appointments, customers, schedules, slots } from "../../db/schema.js";
 import { requireAuth, requireClient } from "../../lib/middleware.js";
+import { DEFAULT_RESCHEDULER_CANDIDATE_WINDOW, ensureAppointmentSettingsStorage } from "../settings/settings.service.js";
 import { transitionStatus } from "../appointments/status.service.js";
 import { createWaitlistEntryForCustomer } from "../waitlist/waitlist.service.js";
 import { listWaitlistEntriesByCustomerIds } from "../waitlist/waitlist.service.js";
@@ -13,6 +14,8 @@ const DEFAULT_TIME_SLOT_SIZE = 30;
 const DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5];
 const DEFAULT_OFFICE_HOURS_START = "08:00";
 const DEFAULT_OFFICE_HOURS_END = "17:00";
+const MIN_RESCHEDULER_CANDIDATE_WINDOW = 1;
+const MAX_RESCHEDULER_CANDIDATE_WINDOW = 10;
 const SUPPORTED_TIME_SLOT_SIZES = new Set([15, 30, 60]);
 const SLOT_GENERATION_DAYS = 30;
 
@@ -124,6 +127,10 @@ function normalizeAppointmentSettings(row) {
     workingDays: parseWorkingDays(row.working_days),
     officeHoursStart: row.office_hours_start ?? DEFAULT_OFFICE_HOURS_START,
     officeHoursEnd: row.office_hours_end ?? DEFAULT_OFFICE_HOURS_END,
+    reschedulerCandidateWindow:
+      Number.isInteger(Number(row.rescheduler_candidate_window)) && Number(row.rescheduler_candidate_window) > 0
+        ? Number(row.rescheduler_candidate_window)
+        : DEFAULT_RESCHEDULER_CANDIDATE_WINDOW,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -180,17 +187,7 @@ function formatTime(date) {
 async function ensureAppointmentSettings() {
   const now = new Date();
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS "appointment_settings" (
-      "id" text PRIMARY KEY NOT NULL,
-      "time_slot_size" integer NOT NULL,
-      "working_days" text NOT NULL,
-      "office_hours_start" text DEFAULT '08:00' NOT NULL,
-      "office_hours_end" text DEFAULT '17:00' NOT NULL,
-      "created_at" timestamp NOT NULL,
-      "updated_at" timestamp NOT NULL
-    )
-  `);
+  await ensureAppointmentSettingsStorage();
 
   await pool.query(
     `
@@ -200,10 +197,11 @@ async function ensureAppointmentSettings() {
         "working_days",
         "office_hours_start",
         "office_hours_end",
+        "rescheduler_candidate_window",
         "created_at",
         "updated_at"
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
       ON CONFLICT ("id") DO NOTHING
     `,
     [
@@ -212,6 +210,7 @@ async function ensureAppointmentSettings() {
       serializeWorkingDays(DEFAULT_WORKING_DAYS),
       DEFAULT_OFFICE_HOURS_START,
       DEFAULT_OFFICE_HOURS_END,
+      DEFAULT_RESCHEDULER_CANDIDATE_WINDOW,
       now
     ]
   );
@@ -224,6 +223,7 @@ async function ensureAppointmentSettings() {
         "working_days",
         "office_hours_start",
         "office_hours_end",
+        "rescheduler_candidate_window",
         "created_at",
         "updated_at"
       FROM "appointment_settings"
@@ -421,6 +421,7 @@ function validateAppointmentSettingsPayload(body) {
     typeof body?.officeHoursStart === "string" ? body.officeHoursStart.trim() : "";
   const officeHoursEnd =
     typeof body?.officeHoursEnd === "string" ? body.officeHoursEnd.trim() : "";
+  const reschedulerCandidateWindow = Number(body?.reschedulerCandidateWindow);
   const startMinutes = timeSlotToMinutes(officeHoursStart);
   const endMinutes = timeSlotToMinutes(officeHoursEnd);
 
@@ -447,12 +448,21 @@ function validateAppointmentSettingsPayload(body) {
     errors.officeHoursEnd = "Closing time must be after opening time.";
   }
 
+  if (
+    !Number.isInteger(reschedulerCandidateWindow)
+    || reschedulerCandidateWindow < MIN_RESCHEDULER_CANDIDATE_WINDOW
+    || reschedulerCandidateWindow > MAX_RESCHEDULER_CANDIDATE_WINDOW
+  ) {
+    errors.reschedulerCandidateWindow = `Choose between ${MIN_RESCHEDULER_CANDIDATE_WINDOW} and ${MAX_RESCHEDULER_CANDIDATE_WINDOW} appointments.`;
+  }
+
   return {
     values: {
       timeSlotSize,
       workingDays: uniqueWorkingDays,
       officeHoursStart,
-      officeHoursEnd
+      officeHoursEnd,
+      reschedulerCandidateWindow
     },
     errors
   };
@@ -737,15 +747,17 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
           "working_days",
           "office_hours_start",
           "office_hours_end",
+          "rescheduler_candidate_window",
           "created_at",
           "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
         ON CONFLICT ("id") DO UPDATE SET
           "time_slot_size" = EXCLUDED."time_slot_size",
           "working_days" = EXCLUDED."working_days",
           "office_hours_start" = EXCLUDED."office_hours_start",
           "office_hours_end" = EXCLUDED."office_hours_end",
+          "rescheduler_candidate_window" = EXCLUDED."rescheduler_candidate_window",
           "updated_at" = EXCLUDED."updated_at"
         RETURNING
           "id",
@@ -753,6 +765,7 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
           "working_days",
           "office_hours_start",
           "office_hours_end",
+          "rescheduler_candidate_window",
           "created_at",
           "updated_at"
       `,
@@ -762,6 +775,7 @@ legacyRouter.patch("/appointment-settings", requireAuth, requireClient, async (r
         serializeWorkingDays(values.workingDays),
         values.officeHoursStart,
         values.officeHoursEnd,
+        values.reschedulerCandidateWindow,
         now
       ]
     );
