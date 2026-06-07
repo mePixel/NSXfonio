@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { webhookEvents, waitlistOffers } from "../../db/schema.js";
+import { webhookEvents, waitlistOffers, customers, waitingListEntries, communicationLogs } from "../../db/schema.js";
 import {
   completeAcceptedReschedulerOffer,
   recordCandidateForOffer,
@@ -9,6 +9,8 @@ import {
 } from "../rescheduler/rescheduler.service.js";
 import { advanceOfferCycle, moveWaitlistEntryToEnd } from "../waitlist/offers.service.js";
 import { handleInboundAppointmentWebhook, isInboundAppointmentWebhook } from "./fonio.inbound.service.js";
+import { sendNoAnswerFollowupEmail } from "../email/email.service.js";
+import { getSlot } from "../slots/slots.service.js";
 
 function extractWaitlistDecision(payload) {
   const rawValues = [
@@ -80,6 +82,40 @@ async function storeWebhookEvent(payload) {
   }
 }
 
+async function sendNoAnswerEmailForOffer(offer) {
+  const [entry] = await db
+    .select()
+    .from(waitingListEntries)
+    .where(eq(waitingListEntries.id, offer.waitingListEntryId));
+
+  if (!entry) return { sent: false, reason: "waitlist_entry_not_found" };
+
+  const [customer] = await db
+    .select()
+    .from(customers)
+    .where(eq(customers.id, entry.customerId));
+
+  if (!customer) return { sent: false, reason: "customer_not_found" };
+
+  const slot = await getSlot(offer.clientId, offer.slotId);
+  const emailResult = await sendNoAnswerFollowupEmail(customer, offer, slot);
+
+  await db.insert(communicationLogs).values({
+    id: randomUUID(),
+    clientId: offer.clientId,
+    waitlistOfferId: offer.id,
+    customerId: customer.id,
+    channel: "email",
+    direction: "outbound",
+    eventType: "no_answer_followup_email",
+    status: emailResult.sent ? "sent" : "failed",
+    externalMessageId: emailResult.messageId ?? null,
+    externalRef: JSON.stringify(emailResult)
+  });
+
+  return emailResult;
+}
+
 async function handleOutboundWebhook(payload) {
   const offerId = payload?.context?.offerId;
   const callStatus = payload?.status
@@ -121,6 +157,15 @@ async function handleOutboundWebhook(payload) {
     await db.update(waitlistOffers)
       .set({ status: "call_no_answer", updatedAt: new Date() })
       .where(eq(waitlistOffers.id, offerId));
+
+    let emailResult = { sent: false, reason: "not_attempted" };
+    try {
+      emailResult = await sendNoAnswerEmailForOffer(offer);
+    } catch (error) {
+      console.error("[fonio webhook] Error sending follow-up email:", error);
+      emailResult = { sent: false, reason: "send_or_log_failed", error: error?.message ?? String(error) };
+    }
+
     await syncReschedulerOfferOutcome(offer.clientId, offerId);
     await moveWaitlistEntryToEnd(offer.clientId, offer.waitingListEntryId);
     let advanced = { nextOffer: null };
@@ -140,6 +185,7 @@ async function handleOutboundWebhook(payload) {
       mode: "outbound",
       outcome: "call_no_answer",
       offerId,
+      email: emailResult,
       advanced: Boolean(advanced.nextOffer)
     };
   }
