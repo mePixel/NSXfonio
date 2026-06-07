@@ -14,6 +14,12 @@ import { clientsAction, clientsLoader } from "@/routes/clients-data"
 import { getCurrentSession } from "@/lib/auth"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
+import { PublicReschedulerPage } from "@/routes/public-rescheduler"
+import { PublicReschedulerSuccessPage } from "@/routes/public-rescheduler-success"
+import {
+  publicReschedulerAction,
+  publicReschedulerLoader,
+} from "@/routes/public-rescheduler-data"
 import { ReschedulerPage } from "@/routes/rescheduler"
 import { reschedulerAction, reschedulerLoader } from "@/routes/rescheduler-data"
 import { settingsAction, settingsLoader } from "@/routes/settings-data"
@@ -80,6 +86,18 @@ export const router = createBrowserRouter([
     loader: onboardingLoader,
     hydrateFallbackElement: <LoadingPage />,
     element: <OnboardingPage />,
+  },
+  {
+    path: "/reschedule-success",
+    element: <PublicReschedulerSuccessPage />,
+  },
+  {
+    path: "/reschedule-offer/:candidateId",
+    loader: publicReschedulerLoader,
+    action: publicReschedulerAction,
+    hydrateFallbackElement: <LoadingPage />,
+    element: <PublicReschedulerPage />,
+    errorElement: <RouteErrorPage />,
   },
   {
     id: "root",

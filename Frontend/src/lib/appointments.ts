@@ -40,6 +40,7 @@ export type AppointmentSettings = {
   officeHoursStart: string;
   officeHoursEnd: string;
   reschedulerCandidateWindow: number;
+  emailResponseDeadlineMinutes: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -59,7 +60,15 @@ export type AppointmentField =
 
 export type AppointmentFieldErrors = Partial<Record<AppointmentField, string>>;
 export type AppointmentSettingsFieldErrors = Partial<
-  Record<"timeSlotSize" | "workingDays" | "officeHoursStart" | "officeHoursEnd" | "reschedulerCandidateWindow", string>
+  Record<
+    | "timeSlotSize"
+    | "workingDays"
+    | "officeHoursStart"
+    | "officeHoursEnd"
+    | "reschedulerCandidateWindow"
+    | "emailResponseDeadlineMinutes",
+    string
+  >
 >;
 
 type ApiErrorBody = {
@@ -260,6 +269,7 @@ export async function updateAppointmentSettings(formData: FormData) {
   const officeHoursStart = String(formData.get("officeHoursStart") ?? "").trim();
   const officeHoursEnd = String(formData.get("officeHoursEnd") ?? "").trim();
   const reschedulerCandidateWindow = Number(formData.get("reschedulerCandidateWindow"));
+  const emailResponseDeadlineMinutes = Number(formData.get("emailResponseDeadlineMinutes"));
   const response = await fetch(`${apiURL}/api/appointment-settings`, {
     method: "PATCH",
     credentials: "include",
@@ -272,6 +282,7 @@ export async function updateAppointmentSettings(formData: FormData) {
       officeHoursStart,
       officeHoursEnd,
       reschedulerCandidateWindow,
+      emailResponseDeadlineMinutes,
     }),
   });
 
@@ -287,7 +298,14 @@ export async function updateAppointmentSettings(formData: FormData) {
       intent: "updateSettings" as const,
       message: error.message,
       errors: error.errors as AppointmentSettingsFieldErrors,
-      values: { timeSlotSize, workingDays, officeHoursStart, officeHoursEnd, reschedulerCandidateWindow },
+      values: {
+        timeSlotSize,
+        workingDays,
+        officeHoursStart,
+        officeHoursEnd,
+        reschedulerCandidateWindow,
+        emailResponseDeadlineMinutes,
+      },
     };
   }
 

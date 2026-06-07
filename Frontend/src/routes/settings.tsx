@@ -5,6 +5,7 @@ import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ResponseDeadlineField } from "@/components/response-deadline-field";
 import { loadAppointmentSettings, updateAppointmentSettings } from "@/lib/appointments";
 import { type FonioApiKeySummary, loadFonioApiKey, rotateFonioApiKey, revokeFonioApiKey } from "@/lib/fonio-settings";
 
@@ -185,6 +186,11 @@ export function SettingsPage() {
                   required
                 />
               </label>
+
+              <ResponseDeadlineField
+                defaultValue={appointmentSettings.emailResponseDeadlineMinutes}
+                error={appointmentSettingsError?.errors.emailResponseDeadlineMinutes}
+              />
 
               <input type="hidden" name="timeSlotSize" value={String(appointmentSettings.timeSlotSize)} />
               <input type="hidden" name="officeHoursStart" value={appointmentSettings.officeHoursStart} />

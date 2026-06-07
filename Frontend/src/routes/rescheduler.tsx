@@ -62,6 +62,14 @@ const candidateStateLabels: Record<ReschedulerCandidate["state"], string> = {
   skipped: "Skipped",
 };
 
+function getCandidateStateLabel(candidate: ReschedulerCandidate) {
+  if (candidate.state === "accepted" && candidate.fulfilledBy === "email") {
+    return "Accepted by email";
+  }
+
+  return candidateStateLabels[candidate.state];
+}
+
 const activeStates = new Set<ReschedulerState>(["pending", "calling"]);
 
 export function ReschedulerPage() {
@@ -265,7 +273,7 @@ function CandidateList({ candidates }: { candidates: ReschedulerCandidate[] }) {
               >
                 <div className="flex min-w-0 items-center justify-between gap-2">
                   <span className="truncate font-medium">{name}</span>
-                  <CandidateStateBadge state={candidate.state} />
+                  <CandidateStateBadge candidate={candidate} />
                 </div>
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                   <span>{candidate.calledAt ? formatDateTime(candidate.calledAt) : "Not called yet"}</span>
@@ -316,7 +324,9 @@ function StateBadge({ state }: { state: ReschedulerState }) {
   );
 }
 
-function CandidateStateBadge({ state }: { state: ReschedulerCandidate["state"] }) {
+function CandidateStateBadge({ candidate }: { candidate: ReschedulerCandidate }) {
+  const { state } = candidate;
+
   return (
     <span
       className={cn(
@@ -328,7 +338,7 @@ function CandidateStateBadge({ state }: { state: ReschedulerCandidate["state"] }
         state === "skipped" && "border-muted bg-muted text-muted-foreground",
       )}
     >
-      {candidateStateLabels[state]}
+      {getCandidateStateLabel(candidate)}
     </span>
   );
 }

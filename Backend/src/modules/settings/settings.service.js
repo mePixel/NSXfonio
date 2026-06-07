@@ -4,6 +4,7 @@ import { db, pool } from "../../db/index.js";
 import { fonioApiKeys } from "../../db/schema.js";
 
 export const DEFAULT_RESCHEDULER_CANDIDATE_WINDOW = 3;
+export const DEFAULT_EMAIL_RESPONSE_DEADLINE_MINUTES = 60;
 
 function hashApiKey(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -92,6 +93,7 @@ export async function ensureAppointmentSettingsStorage() {
       "office_hours_start" text DEFAULT '08:00' NOT NULL,
       "office_hours_end" text DEFAULT '17:00' NOT NULL,
       "rescheduler_candidate_window" integer DEFAULT ${DEFAULT_RESCHEDULER_CANDIDATE_WINDOW} NOT NULL,
+      "email_response_deadline_minutes" integer DEFAULT ${DEFAULT_EMAIL_RESPONSE_DEADLINE_MINUTES} NOT NULL,
       "created_at" timestamp NOT NULL,
       "updated_at" timestamp NOT NULL
     )
@@ -101,6 +103,12 @@ export async function ensureAppointmentSettingsStorage() {
     ALTER TABLE "appointment_settings"
     ADD COLUMN IF NOT EXISTS "rescheduler_candidate_window" integer
     DEFAULT ${DEFAULT_RESCHEDULER_CANDIDATE_WINDOW} NOT NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE "appointment_settings"
+    ADD COLUMN IF NOT EXISTS "email_response_deadline_minutes" integer
+    DEFAULT ${DEFAULT_EMAIL_RESPONSE_DEADLINE_MINUTES} NOT NULL
   `);
 }
 
@@ -120,6 +128,27 @@ export async function getReschedulerCandidateWindow() {
   const rawValue = Number(rows[0]?.rescheduler_candidate_window);
   if (!Number.isInteger(rawValue) || rawValue < 1) {
     return DEFAULT_RESCHEDULER_CANDIDATE_WINDOW;
+  }
+
+  return rawValue;
+}
+
+export async function getEmailResponseDeadlineMinutes() {
+  await ensureAppointmentSettingsStorage();
+
+  const { rows } = await pool.query(
+    `
+      SELECT "email_response_deadline_minutes"
+      FROM "appointment_settings"
+      WHERE "id" = $1
+      LIMIT 1
+    `,
+    ["default"]
+  );
+
+  const rawValue = Number(rows[0]?.email_response_deadline_minutes);
+  if (!Number.isInteger(rawValue) || rawValue < 1 || rawValue > 10080) {
+    return DEFAULT_EMAIL_RESPONSE_DEADLINE_MINUTES;
   }
 
   return rawValue;

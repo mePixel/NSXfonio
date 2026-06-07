@@ -3,6 +3,10 @@ import { env } from "../../config/env.js";
 
 let transporter = null;
 
+function buildOfferConfirmationLink(candidateId) {
+  return `${env.publicAppUrl}/reschedule-offer/${encodeURIComponent(candidateId)}`;
+}
+
 function initializeTransporter() {
   if (transporter) return transporter;
 
@@ -48,7 +52,25 @@ function formatSlotTime(slot) {
   });
 }
 
-export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
+function formatResponseDeadline(value) {
+  if (!value) return null;
+
+  const deadline = new Date(value);
+  if (Number.isNaN(deadline.getTime())) return null;
+
+  return deadline.toLocaleString("de-AT", {
+    dateStyle: "long",
+    timeStyle: "short",
+    timeZone: "Europe/Vienna"
+  });
+}
+
+export async function sendNoAnswerFollowupEmail(
+  customer,
+  offer,
+  slot,
+  { candidateId = null } = {}
+) {
   const emailTransporter = initializeTransporter();
   if (!emailTransporter) {
     console.warn("[email] Email service not available, skipping email send");
@@ -61,21 +83,42 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
   }
 
   try {
-    const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || "there";
+    const customerName = `${customer.firstName} ${customer.lastName}`;
+    const subject = `We Tried to Reach You - About Your ${slot?.title || "Appointment"}`;
+    const confirmationLink = candidateId ? buildOfferConfirmationLink(candidateId) : null;
     const slotTime = formatSlotTime(slot);
-    const subject = "We tried to reach you about an earlier appointment";
+    const responseDeadline = formatResponseDeadline(offer?.responseDeadlineAt);
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2>We Tried to Reach You</h2>
         <p>Hi ${customerName},</p>
         
-        <p>We recently tried to give you a call about an earlier appointment, but we weren't able to reach you.</p>
+        <p>We recently tried to give you a call about your ${slot?.title || "appointment"}, but we weren't able to reach you.</p>
+        ${confirmationLink ? `
+        <p>An earlier appointment is currently available for you. Use the link below to confirm the new appointment and choose which of your next appointments should be cancelled.</p>
+        <p style="margin: 24px 0;">
+          <a
+            href="${confirmationLink}"
+            style="display: inline-block; background: #111827; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 8px; font-weight: 600;"
+          >
+            Confirm earlier appointment
+          </a>
+        </p>
+        <p>If the button does not work, open this link in your browser:<br><a href="${confirmationLink}">${confirmationLink}</a></p>
+        ${responseDeadline ? `
+        <p style="margin: 16px 0; padding: 12px 16px; border-left: 4px solid #d97706; background: #fffbeb; color: #92400e;">
+          <strong>Please respond before ${responseDeadline}.</strong><br>
+          After this time, the invitation expires and the appointment may be offered to another patient.
+        </p>
+        ` : ""}
+        ` : ""}
         
         <p>We'd still love to help! Here are some ways you can follow up:</p>
         <ul>
           <li>Call us back at your earliest convenience</li>
           <li>Reply to this email to let us know your availability</li>
+          ${confirmationLink ? "<li>Use the confirmation link above to accept the earlier slot</li>" : ""}
         </ul>
         
         <p style="margin-top: 24px; font-size: 14px; color: #666;">
@@ -96,9 +139,15 @@ export async function sendNoAnswerFollowupEmail(customer, offer, slot) {
 
       We recently tried to give you a call about an earlier appointment, but we weren't able to reach you.
 
+      ${confirmationLink ? `An earlier appointment is currently available for you. Open this link to confirm the new appointment and choose which of your next appointments should be cancelled:
+      ${confirmationLink}
+      ${responseDeadline ? `
+      Please respond before ${responseDeadline}. After this time, the invitation expires and the appointment may be offered to another patient.` : ""}` : ""}
+
       We'd still love to help! Here are some ways you can follow up:
       - Call us back at your earliest convenience
       - Reply to this email to let us know your availability
+      ${confirmationLink ? "- Use the confirmation link above to accept the earlier slot" : ""}
 
       Appointment Details:
       ${slotTime ? `Available slot: ${slotTime}` : "An earlier slot is available."}

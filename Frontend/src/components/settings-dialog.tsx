@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ResponseDeadlineField } from "@/components/response-deadline-field";
 import { cn } from "@/lib/utils";
 import {
   loadAppointmentSettings,
@@ -503,6 +504,11 @@ function AppointmentSettingsPanel({ onClose }: { onClose: () => void }) {
           </span>
         ) : null}
       </label>
+
+      <ResponseDeadlineField
+        defaultValue={settings.emailResponseDeadlineMinutes}
+        error={actionError?.errors.emailResponseDeadlineMinutes}
+      />
 
       <DialogFooter>
         <Button

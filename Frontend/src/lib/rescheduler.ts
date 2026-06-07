@@ -25,6 +25,7 @@ type ReschedulerCustomer = {
 export type ReschedulerCandidate = {
   id: string;
   state: ReschedulerCandidateState;
+  fulfilledBy: "call" | "email" | null;
   notes: string | null;
   calledAt: string | null;
   waitlistOfferId: string | null;
