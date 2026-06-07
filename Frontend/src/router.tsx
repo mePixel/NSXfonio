@@ -15,6 +15,7 @@ import { getCurrentSession } from "@/lib/auth"
 import { LoadingPage } from "@/routes/loading"
 import { LoginPage } from "@/routes/login"
 import { PublicReschedulerPage } from "@/routes/public-rescheduler"
+import { PublicReschedulerSuccessPage } from "@/routes/public-rescheduler-success"
 import {
   publicReschedulerAction,
   publicReschedulerLoader,
@@ -85,6 +86,10 @@ export const router = createBrowserRouter([
     loader: onboardingLoader,
     hydrateFallbackElement: <LoadingPage />,
     element: <OnboardingPage />,
+  },
+  {
+    path: "/reschedule-success",
+    element: <PublicReschedulerSuccessPage />,
   },
   {
     path: "/reschedule-offer/:candidateId",

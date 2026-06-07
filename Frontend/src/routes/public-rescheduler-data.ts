@@ -1,4 +1,8 @@
-import { type ActionFunctionArgs, type LoaderFunctionArgs } from "react-router";
+import {
+  redirect,
+  type ActionFunctionArgs,
+  type LoaderFunctionArgs,
+} from "react-router";
 
 import {
   acceptPublicRescheduleOffer,
@@ -37,6 +41,10 @@ export async function publicReschedulerAction({
   const result = intent === "decline"
     ? await declinePublicRescheduleOffer(candidateId)
     : await acceptPublicRescheduleOffer(candidateId, formData);
+
+  if (intent !== "decline" && result.ok) {
+    return redirect("/reschedule-success");
+  }
 
   return Response.json(result, {
     status: result.ok ? 200 : 400,
