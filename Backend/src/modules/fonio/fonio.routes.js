@@ -203,7 +203,7 @@ fonioRouter.post("/rescheduler/accept", async (req, res, next) => {
   try {
     const slotBooking = getReschedulerAcceptSlotBooking(req.body);
 
-    if (slotBooking.slotId && slotBooking.customerId) {
+    if (slotBooking.slotId) {
       const result = await acceptReschedulerSlotBooking(req.fonioAuth.clientId, {
         slotId: slotBooking.slotId,
         customerId: slotBooking.customerId,
@@ -220,7 +220,7 @@ fonioRouter.post("/rescheduler/accept", async (req, res, next) => {
       res.status(400).json({
         handled: false,
         reason: "missing_rescheduler_booking_context",
-        error: "slotId and patientId/customerId are required"
+        error: "slotId is required"
       });
       return;
     }

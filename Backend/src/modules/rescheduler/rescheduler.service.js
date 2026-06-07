@@ -363,30 +363,46 @@ export async function completeReschedulerSlotBooking(
     throw Object.assign(new Error("This rebooking procedure has been aborted."), { status: 422 });
   }
 
-  if (slot.status !== "available") {
-    throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
-  }
-
-  const appointmentToReplace = await getAppointmentToReplace(clientId, customerId, selectedAppointmentId);
-  if (!appointmentToReplace) {
-    throw Object.assign(new Error("Customer has no upcoming appointment to replace."), { status: 422 });
-  }
-
   const [matchingOffer] = await db
     .select({
       id: waitlistOffers.id,
-      waitingListEntryId: waitlistOffers.waitingListEntryId
+      waitingListEntryId: waitlistOffers.waitingListEntryId,
+      customerId: waitingListEntries.customerId
     })
     .from(waitlistOffers)
     .innerJoin(waitingListEntries, eq(waitlistOffers.waitingListEntryId, waitingListEntries.id))
     .where(and(
       eq(waitlistOffers.clientId, clientId),
       eq(waitlistOffers.slotId, slot.id),
-      eq(waitingListEntries.customerId, customerId),
       inArray(waitlistOffers.status, ["calling", "pending", "whatsapp_sent"])
     ))
     .orderBy(desc(waitlistOffers.createdAt))
     .limit(1);
+
+  const resolvedCustomerId = matchingOffer?.customerId ?? customerId ?? null;
+  if (!resolvedCustomerId) {
+    throw Object.assign(new Error("Patient/customer id is required when no active offer exists for the slot."), {
+      status: 400
+    });
+  }
+
+  if (customerId && matchingOffer?.customerId && customerId !== matchingOffer.customerId) {
+    console.warn("[rescheduler accept] customerId mismatch; using active slot offer customer", {
+      slotId: slot.id,
+      activeOfferId: matchingOffer.id,
+      activeOfferCustomerId: matchingOffer.customerId,
+      requestedCustomerId: customerId
+    });
+  }
+
+  if (slot.status !== "available") {
+    throw Object.assign(new Error("Offered slot is no longer available"), { status: 409 });
+  }
+
+  const appointmentToReplace = await getAppointmentToReplace(clientId, resolvedCustomerId, selectedAppointmentId);
+  if (!appointmentToReplace) {
+    throw Object.assign(new Error("Customer has no upcoming appointment to replace."), { status: 422 });
+  }
 
   const now = new Date();
   let releasedAppointment = null;
@@ -398,7 +414,7 @@ export async function completeReschedulerSlotBooking(
       .values({
         id: randomUUID(),
         clientId,
-        customerId,
+        customerId: resolvedCustomerId,
         slotId: slot.id,
         title: appointmentToReplace?.title ?? "Waitlist rescheduled appointment",
         startsAt: slot.startsAt,
@@ -495,7 +511,7 @@ export async function completeReschedulerSlotBooking(
         ? and(
           eq(reschedulerCandidateCalls.clientId, clientId),
           eq(reschedulerCandidateCalls.reschedulerFlowId, flow.id),
-          eq(reschedulerCandidateCalls.customerId, customerId)
+          eq(reschedulerCandidateCalls.customerId, resolvedCustomerId)
         )
         : null;
 
@@ -515,7 +531,7 @@ export async function completeReschedulerSlotBooking(
       .set({
         state: "filled",
         replacementAppointmentId: createdAppointment.id,
-        replacementCustomerId: customerId,
+        replacementCustomerId: resolvedCustomerId,
         completedAt: now,
         updatedAt: now
       })
@@ -540,7 +556,7 @@ export async function completeReschedulerSlotBooking(
           metadataJson: {
             offerId: matchingOffer?.id ?? null,
             slotId: slot.id,
-            customerId,
+            customerId: resolvedCustomerId,
             selectedAppointmentId: appointmentToReplace?.id ?? null,
             replacementAppointmentId: createdAppointment.id
           }
@@ -553,7 +569,7 @@ export async function completeReschedulerSlotBooking(
       id: randomUUID(),
       clientId,
       appointmentId: createdAppointment.id,
-      customerId,
+      customerId: resolvedCustomerId,
       waitlistOfferId: matchingOffer?.id ?? null,
       channel: "call",
       direction: "outbound",
@@ -566,7 +582,7 @@ export async function completeReschedulerSlotBooking(
     return { replacementAppointment: createdAppointment };
   });
 
-  await deleteWaitlistEntryByCustomer(clientId, customerId);
+  await deleteWaitlistEntryByCustomer(clientId, resolvedCustomerId);
 
   if (releasedAppointment?.slotId) {
     nextOfferResult = await autoStartOfferCycle(clientId, releasedAppointment.slotId, { userId });
